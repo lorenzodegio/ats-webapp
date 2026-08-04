@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Esame Prescrizioni — Banco di Lavoro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="pad">
+
+  <header class="pad-header">
+    <div class="brand">
+      <div class="rx-mark" aria-hidden="true">℞</div>
+      <div class="brand-text">
+        <h1>Esame Prescrizioni</h1>
+        <p>Banco di lavoro per il caricamento, il preprocessing e l'esame automatico di prescrizioni mediche in lotto.</p>
+      </div>
+    </div>
+    <div class="batch-box">
+      <div>Lotto&nbsp; <b id="batchCode">—</b></div>
+      <div>Data&nbsp;&nbsp; <b id="batchDate">—</b></div>
+      <span class="mode-badge" id="modeBadge">Modalità demo</span>
+    </div>
+  </header>
+
+  <div class="tear-divider" aria-hidden="true"></div>
+
+  <!-- ============ STEP 1 — CARICAMENTO ============ -->
+  <section class="ledger-section" id="upload-section">
+    <p class="section-eyebrow">Fase 1</p>
+    <h2 class="section-title">Caricamento file</h2>
+
+    <div class="dropzone" id="dropzone" tabindex="0" role="button"
+         aria-label="Trascina qui i file oppure premi Invio per selezionarli">
+      <div class="dz-icon" aria-hidden="true">⤒</div>
+      <p>Trascina qui le prescrizioni, oppure <button type="button" class="link-btn" id="btnBrowse">sfoglia i file</button></p>
+      <p class="hint">PDF, JPG, PNG, TIFF, HEIC — più file contemporaneamente, max 20&nbsp;MB ciascuno</p>
+      <input type="file" id="fileInput" multiple hidden
+             accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,.heic">
+    </div>
+
+    <p class="file-count" id="fileCount">Nessun file caricato.</p>
+    <ul class="file-list" id="fileList"></ul>
+  </section>
+
+  <div class="tear-divider" aria-hidden="true"></div>
+
+  <!-- ============ STEP 2/3 — ELABORAZIONE ============ -->
+  <section class="ledger-section" id="process-section">
+    <p class="section-eyebrow">Fase 2 — 3</p>
+    <h2 class="section-title">Elaborazione</h2>
+
+    <ol class="stepper" id="stepper" aria-label="Avanzamento del processo">
+      <li class="step active" data-step="upload"><span class="circle">1</span>Caricamento</li>
+      <li class="step" data-step="preprocessing"><span class="circle">2</span>Preprocessing</li>
+      <li class="step" data-step="examining"><span class="circle">3</span>Esame</li>
+      <li class="step" data-step="done"><span class="circle">4</span>Risultati</li>
+    </ol>
+
+    <div class="controls">
+      <button class="btn" id="btnPreprocess" disabled>Avvia preprocessing</button>
+      <button class="btn" id="btnExamine" disabled>Avvia esame prescrizioni</button>
+      <button class="btn btn-ghost" id="btnReset">Nuovo lotto</button>
+    </div>
+
+    <div class="progress-wrap">
+      <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+      <div class="progress-label">
+        <span id="progressText">In attesa</span>
+        <span id="progressPct">0%</span>
+      </div>
+    </div>
+
+    <ul class="process-list" id="processFileList"></ul>
+
+    <div class="log-panel" id="logPanel" role="log" aria-live="polite" aria-label="Registro di avanzamento"></div>
+  </section>
+
+  <div class="tear-divider" aria-hidden="true"></div>
+
+  <!-- ============ STEP 4 — RISULTATI ============ -->
+  <section class="ledger-section" id="results-section" hidden>
+    <p class="section-eyebrow">Fase 4</p>
+    <h2 class="section-title">Risultati</h2>
+
+    <div class="results-meta">
+      <p id="resultsMeta">—</p>
+      <button class="btn-stamp" id="btnDownload">Scarica Excel</button>
+    </div>
+
+    <div class="table-scroll">
+      <table class="results-table">
+        <thead>
+          <tr>
+            <th>File</th><th>Paziente</th><th>Medico</th><th>Farmaco/i</th>
+            <th>Dosaggio</th><th>Data prescr.</th><th>Stato</th><th>Note</th>
+          </tr>
+        </thead>
+        <tbody id="resultsBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    Frontend indipendente dal backend: senza un backend configurato, preprocessing ed esame vengono
+    <b>simulati</b> localmente (dati di esempio). Per collegare un backend reale, imposta i due
+    endpoint in <code>js/api.js</code> — vedi <code>README.md</code> e <code>backend-example/</code>
+    per il contratto API e un server di riferimento.
+  </footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
+<script src="js/api.js" defer></script>
+<script src="js/ui.js" defer></script>
+<script src="js/app.js" defer></script>
+</body>
+</html>
