@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<title>Accedi — ATS Cannabis OCR</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="pagina-login">
+
+<div class="login-box">
+  <h1 class="login-box__titolo">ATS Cannabis OCR</h1>
+  <p class="login-box__sottotitolo">Accedi con le tue credenziali</p>
+
+  {% if errore %}
+  <div class="avviso avviso--errore">{{ errore }}</div>
+  {% endif %}
+
+  <form method="post" action="/login" class="login-box__form">
+    <label>
+      Username
+      <input type="text" name="username" required autofocus>
+    </label>
+    <label>
+      Password
+      <input type="password" name="password" required>
+    </label>
+    <button type="submit">Accedi</button>
+  </form>
+</div>
+
+</body>
+</html>

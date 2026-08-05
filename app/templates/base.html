@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<title>{% block titolo %}ATS Cannabis OCR{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar__titolo">ATS OCR</div>
+
+    <nav class="sidebar__nav">
+      <a href="/" class="sidebar__link {% if voce_attiva == 'dashboard' %}sidebar__link--attivo{% endif %}">
+        <span class="sidebar__icon">&#9702;</span> Dashboard
+      </a>
+      <a href="/jobs/nuovo" class="sidebar__link {% if voce_attiva == 'nuova' %}sidebar__link--attivo{% endif %}">
+        <span class="sidebar__icon">+</span> Nuova elaborazione
+      </a>
+      <a href="/jobs" class="sidebar__link {% if voce_attiva == 'elaborazioni' %}sidebar__link--attivo{% endif %}">
+        <span class="sidebar__icon">&#9642;</span> Elaborazioni
+      </a>
+      <a href="/archivio" class="sidebar__link {% if voce_attiva == 'archivio' %}sidebar__link--attivo{% endif %}">
+        <span class="sidebar__icon">&#128193;</span> Archivio
+      </a>
+      <a href="/difformita" class="sidebar__link {% if voce_attiva == 'difformita' %}sidebar__link--attivo{% endif %}">
+        <span class="sidebar__icon">&#9888;</span> Difformità
+      </a>
+      <a href="/impostazioni" class="sidebar__link {% if voce_attiva == 'impostazioni' %}sidebar__link--attivo{% endif %}">
+        <span class="sidebar__icon">&#9881;</span> Impostazioni
+      </a>
+    </nav>
+
+    {% if utente %}
+    <div class="sidebar__utente">
+      <div class="sidebar__utente-nome">{{ utente.nome_completo or utente.username }}</div>
+      <a href="/logout" class="sidebar__logout">Esci</a>
+    </div>
+    {% endif %}
+  </aside>
+
+  <main class="contenuto">
+    {% block contenuto %}{% endblock %}
+  </main>
+</div>
+
+</body>
+</html>

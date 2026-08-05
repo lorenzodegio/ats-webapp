@@ -1,0 +1,24 @@
+# Dati sanitari reali — MAI committare (vincolo "privacy by design", documento Sez. 1.1)
+dati/
+uploads/
+output/
+ollama-dati/
+
+# Database locale (contiene dati estratti dalle prescrizioni)
+*.db
+*.db-journal
+
+# Ambiente Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor / sistema operativo
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Configurazioni locali con eventuali segreti
+.env

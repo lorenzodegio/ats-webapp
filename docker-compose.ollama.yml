@@ -1,0 +1,43 @@
+# docker-compose.ollama.yml
+# ---------------------------
+# Container Ollama, separato dai 4 servizi della pipeline (docker-compose.yml)
+# — ricreato dopo che un reset di Docker Desktop ha cancellato il
+# container "ats-ollama" preesistente insieme a tutti i suoi modelli.
+#
+# DIFFERENZA IMPORTANTE rispetto a prima: qui il volume ./ollama-dati
+# rende i modelli scaricati PERSISTENTI sul disco del tuo PC, non solo
+# dentro il container — un futuro reset di Docker Desktop cancellerebbe
+# di nuovo il container, ma i modelli scaricati resterebbero sul disco,
+# pronti ad essere riusati senza doverli riscaricare.
+#
+# Uso:
+#   docker network create ats-pipeline_default   (una sola volta, se non esiste già)
+#   docker compose -f docker-compose.ollama.yml up -d
+#   docker exec ats-ollama ollama pull qwen2.5vl:7b
+#   docker exec ats-ollama ollama pull qwen2.5vl:32b
+
+networks:
+  ats-pipeline_default:
+    external: true
+
+services:
+  ats-ollama:
+    image: ollama/ollama:latest
+    container_name: ats-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama-dati:/root/.ollama
+    networks:
+      - ats-pipeline_default
+    restart: unless-stopped
+    # Se la tua macchina ha una GPU NVIDIA con supporto Docker (WSL2),
+    # scommenta per farla usare a Ollama — altrimenti gira su CPU,
+    # molto più lento per un modello come qwen2.5vl:32b:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
