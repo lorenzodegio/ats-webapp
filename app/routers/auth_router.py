@@ -3,6 +3,7 @@ from fastapi import APIRouter, Request, Depends, Form
 from fastapi.responses import RedirectResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
+from typing import Optional
 
 from app.database import get_db
 from app.models import Utente
@@ -13,7 +14,7 @@ templates = Jinja2Templates(directory="app/templates")
 
 
 @router.get("/login", response_class=HTMLResponse)
-def form_login(request: Request, errore: str | None = None):
+def form_login(request: Request, errore: Optional[str] = None):
     if request.session.get("utente_id"):
         return RedirectResponse(url="/", status_code=302)
     return templates.TemplateResponse(
