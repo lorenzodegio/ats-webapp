@@ -1,0 +1,11 @@
+{# Partial riutilizzato ovunque venga mostrato lo stato di un Job #}
+{% set s = job.stato.value %}
+{% if s == "completato" %}
+  <span class="badge badge--completato"><span class="badge__puntino"></span>Completata</span>
+{% elif s == "errore" %}
+  <span class="badge badge--errore"><span class="badge__puntino"></span>Errore</span>
+{% elif s == "in_coda" %}
+  <span class="badge badge--in-coda"><span class="badge__puntino"></span>In coda</span>
+{% else %}
+  <span class="badge badge--in-corso"><span class="badge__puntino"></span>In corso &middot; {{ s.replace('fase', 'fase ').replace('_', ' ') }}</span>
+{% endif %}

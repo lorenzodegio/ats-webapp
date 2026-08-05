@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block titolo %}Dashboard — ATS Cannabis OCR{% endblock %}
+
+{% block contenuto %}
+<div class="main__header">
+  <div>
+    <h1>Dashboard</h1>
+    <div class="sottotitolo">Panoramica delle elaborazioni e delle non conformita rilevate</div>
+  </div>
+</div>
+
+<div class="kpi-grid">
+  <div class="kpi-card">
+    <div class="kpi-card__etichetta">Prescrizioni elaborate</div>
+    <div class="kpi-card__valore">{{ prescrizioni_totali }}</div>
+  </div>
+  <div class="kpi-card kpi-card--accento">
+    <div class="kpi-card__etichetta">Difformita rilevate</div>
+    <div class="kpi-card__valore">{{ difformita_totali }}</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-card__etichetta">In coda / in corso</div>
+    <div class="kpi-card__valore">{{ job_in_coda }}</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2 class="card__titolo">Difformita per tipo</h2>
+  {% if difformita_per_tipo %}
+    {% for tipo, conteggio in difformita_per_tipo.items() %}
+    <div class="barra-riga">
+      <div class="barra-riga__etichetta">{{ tipo }}</div>
+      <div class="barra-riga__traccia">
+        <div class="barra-riga__riempimento" style="width: {{ (conteggio / max_difformita * 100) | round(0, 'floor') }}%;"></div>
+      </div>
+      <div class="barra-riga__valore">{{ conteggio }}</div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="stato-vuoto">Nessuna difformita rilevata finora.</div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2 class="card__titolo">Ultime elaborazioni</h2>
+  {% if ultime_elaborazioni %}
+  <table class="tabella">
+    <thead>
+      <tr>
+        <th>File</th>
+        <th>Stato</th>
+        <th>Prescrizioni</th>
+        <th>Creato il</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for job in ultime_elaborazioni %}
+      <tr>
+        <td class="mono">{{ job.nome_file_origine }}</td>
+        <td>{% include "_badge_stato.html" %}</td>
+        <td>{{ job.numero_prescrizioni }}</td>
+        <td>{{ job.creato_il.strftime("%d/%m/%Y %H:%M") }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="stato-vuoto">Nessuna elaborazione ancora avviata. <a href="/jobs/nuovo" style="color: var(--sage); font-weight:600;">Caricane una &rarr;</a></div>
+  {% endif %}
+</div>
+{% endblock %}

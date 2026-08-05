@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+venv/
+.env
+ats_cannabis.db
+uploads/
+.DS_Store

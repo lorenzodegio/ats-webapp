@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block titolo %}Nuova elaborazione — ATS Cannabis OCR{% endblock %}
+
+{% block contenuto %}
+<div class="main__header">
+  <div>
+    <h1>Nuova elaborazione</h1>
+    <div class="sottotitolo">Carica un PDF di prescrizioni e avvia la pipeline</div>
+  </div>
+</div>
+
+{% if request.query_params.get('errore') %}
+<div class="errore-form">{{ request.query_params.get('errore') }}</div>
+{% endif %}
+
+<div class="wizard-steps" id="wizard-steps">
+  <div class="wizard-step wizard-step--attivo" data-step-indicatore="1">
+    <span class="wizard-step__numero">1</span>Caricamento
+  </div>
+  <div class="wizard-step" data-step-indicatore="2">
+    <span class="wizard-step__numero">2</span>Modalita
+  </div>
+  <div class="wizard-step" data-step-indicatore="3">
+    <span class="wizard-step__numero">3</span>Conferma
+  </div>
+  <div class="wizard-step" data-step-indicatore="4">
+    <span class="wizard-step__numero">4</span>Monitoraggio
+  </div>
+</div>
+
+<div class="card">
+  <form id="form-wizard" method="post" action="/jobs/nuovo" enctype="multipart/form-data">
+
+    <!-- Step 1: Caricamento -->
+    <div class="wizard-panel wizard-panel--attivo" data-step="1">
+      <label class="dropzone" id="dropzone" for="input-file">
+        <div>Trascina qui il PDF, oppure clicca per selezionarlo</div>
+        <div style="font-size:12px; margin-top:6px;">Formato accettato: .pdf</div>
+        <div class="dropzone__nome-file" id="nome-file-selezionato"></div>
+      </label>
+      <input type="file" id="input-file" name="file" accept="application/pdf" style="display:none" required>
+    </div>
+
+    <!-- Step 2: Modalita -->
+    <div class="wizard-panel" data-step="2">
+      <label class="opzione-modalita">
+        <input type="radio" name="modalita" value="full" checked>
+        <div class="opzione-modalita__testo">
+          <strong>Completa</strong>
+          <span>Preprocessing, OCR, scrittura Excel e rilevamento difformita.</span>
+        </div>
+      </label>
+      <label class="opzione-modalita">
+        <input type="radio" name="modalita" value="solo_preprocessing">
+        <div class="opzione-modalita__testo">
+          <strong>Solo preprocessing</strong>
+          <span>Split del PDF e lettura barcode, senza avviare l'OCR.</span>
+        </div>
+      </label>
+      <label class="opzione-modalita">
+        <input type="radio" name="modalita" value="da_ocr_in_poi">
+        <div class="opzione-modalita__testo">
+          <strong>Da OCR in poi</strong>
+          <span>Salta il preprocessing (gia' effettuato) e riparte dall'estrazione.</span>
+        </div>
+      </label>
+    </div>
+
+    <!-- Step 3: Conferma -->
+    <div class="wizard-panel" data-step="3">
+      <div class="riepilogo-riga">
+        <span class="riepilogo-riga__etichetta">File selezionato</span>
+        <span class="riepilogo-riga__valore mono" id="riepilogo-file">—</span>
+      </div>
+      <div class="riepilogo-riga">
+        <span class="riepilogo-riga__etichetta">Modalita</span>
+        <span class="riepilogo-riga__valore" id="riepilogo-modalita">—</span>
+      </div>
+      <div class="riepilogo-riga">
+        <span class="riepilogo-riga__etichetta">Avviato da</span>
+        <span class="riepilogo-riga__valore">{{ utente.nome_completo }}</span>
+      </div>
+    </div>
+
+    <!-- Step 4: Monitoraggio (esito dopo l'avvio) -->
+    <div class="wizard-panel" data-step="4">
+      <div class="stato-vuoto" id="messaggio-avvio">
+        Avvio dell'elaborazione in corso, verrai reindirizzato a "Elaborazioni"…
+      </div>
+    </div>
+
+    <div class="wizard-azioni">
+      <button type="button" class="btn btn--secondario" id="btn-indietro" style="visibility:hidden;">Indietro</button>
+      <button type="button" class="btn btn--primario" id="btn-avanti">Avanti</button>
+      <button type="submit" class="btn btn--primario" id="btn-avvia" style="display:none;">Avvia elaborazione</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block script %}
+<script src="/static/js/wizard-nuova-elaborazione.js"></script>
+{% endblock %}

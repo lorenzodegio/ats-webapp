@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block titolo %}ATS Cannabis OCR{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar__brand">ATS OCR</div>
+      <nav class="sidebar__nav">
+        <a href="/" class="sidebar__link {% if voce_attiva == 'dashboard' %}sidebar__link--attivo{% endif %}">
+          <span class="sidebar__icon">&#9702;</span> Dashboard
+        </a>
+        <a href="/jobs/nuovo" class="sidebar__link {% if voce_attiva == 'nuova' %}sidebar__link--attivo{% endif %}">
+          <span class="sidebar__icon">+</span> Nuova elaborazione
+        </a>
+        <a href="/jobs" class="sidebar__link {% if voce_attiva == 'elaborazioni' %}sidebar__link--attivo{% endif %}">
+          <span class="sidebar__icon">&#9679;</span> Elaborazioni
+        </a>
+        <a href="/archivio" class="sidebar__link {% if voce_attiva == 'archivio' %}sidebar__link--attivo{% endif %}">
+          <span class="sidebar__icon">&#9776;</span> Archivio
+        </a>
+        <a href="/difformita" class="sidebar__link {% if voce_attiva == 'difformita' %}sidebar__link--attivo{% endif %}">
+          <span class="sidebar__icon">&#9888;</span> Difformita
+        </a>
+        {% if utente and utente.is_admin %}
+        <a href="/impostazioni" class="sidebar__link {% if voce_attiva == 'impostazioni' %}sidebar__link--attivo{% endif %}">
+          <span class="sidebar__icon">&#9881;</span> Impostazioni
+        </a>
+        {% endif %}
+      </nav>
+      {% if utente %}
+      <div class="sidebar__footer">
+        {{ utente.nome_completo }}<br>
+        <span style="opacity:0.7">{{ utente.ruolo.value if utente.ruolo.value else utente.ruolo }}</span>
+        <a href="/logout">Esci</a>
+      </div>
+      {% endif %}
+    </aside>
+
+    <main class="main">
+      {% block contenuto %}{% endblock %}
+    </main>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+  {% block script %}{% endblock %}
+</body>
+</html>
