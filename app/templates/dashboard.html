@@ -11,12 +11,12 @@
 
 <div class="card" id="pannello-in-corso">
   <h2 class="card__titolo">In corso ora</h2>
-  {% if job_attivi_vista %}
-    {% for voce in job_attivi_vista %}
-    <div class="job-attivo-riga" data-job-id="{{ voce.job.id }}">
+  {% if lotti_attivi_vista %}
+    {% for voce in lotti_attivi_vista %}
+    <div class="job-attivo-riga" data-lotto-id="{{ voce.lotto.id }}">
       <div class="job-attivo-riga__testa">
-        <a href="/jobs/{{ voce.job.id }}" class="job-attivo-riga__nome">{{ voce.job.nome }}</a>
-        <span class="job-attivo-riga__fase">{{ voce.etichetta_fase }}</span>
+        <a href="/lotti/{{ voce.lotto.id }}" class="job-attivo-riga__nome">{{ voce.lotto.nome }}</a>
+        <span class="job-attivo-riga__fase">{{ voce.etichetta_stato }}{% if voce.elaborazione_attiva %} &middot; {{ voce.elaborazione_attiva.fase.value }}{% endif %}</span>
       </div>
       <div class="barra-progresso">
         <div class="barra-progresso__riempimento" style="width: {{ voce.percentuale }}%;"></div>
@@ -24,7 +24,7 @@
     </div>
     {% endfor %}
   {% else %}
-    <div class="stato-vuoto">Nessuna elaborazione in corso al momento. <a href="/jobs/nuovo" style="color: var(--sage); font-weight:600;">Avviane una &rarr;</a></div>
+    <div class="stato-vuoto">Nessun lotto in lavorazione al momento. <a href="/lotti/nuovo" style="color: var(--sage); font-weight:600;">Creane uno &rarr;</a></div>
   {% endif %}
 </div>
 
@@ -33,12 +33,22 @@
 
   <form method="get" action="/" class="filtri-riga filtri-riga--dashboard">
     <div class="campo campo--filtro">
-      <label>Da</label>
-      <input type="date" name="da" value="{{ filtro_da }}">
+      <label>Anno</label>
+      <select name="anno">
+        <option value="">Tutti</option>
+        {% for a in anni_disponibili %}
+        <option value="{{ a }}" {% if a == filtro_anno %}selected{% endif %}>{{ a }}</option>
+        {% endfor %}
+      </select>
     </div>
     <div class="campo campo--filtro">
-      <label>A</label>
-      <input type="date" name="a" value="{{ filtro_a }}">
+      <label>Mese</label>
+      <select name="mese">
+        <option value="">Tutti</option>
+        {% for m in range(1, 13) %}
+        <option value="{{ m }}" {% if m == filtro_mese %}selected{% endif %}>{{ MESI_IT[m] }}</option>
+        {% endfor %}
+      </select>
     </div>
     <div class="campo campo--filtro">
       <label>Stato</label>
@@ -49,25 +59,16 @@
         {% endfor %}
       </select>
     </div>
-    <div class="campo campo--filtro">
-      <label>Modalita</label>
-      <select name="modalita">
-        <option value="">Tutte</option>
-        {% for m in modalita_disponibili %}
-        <option value="{{ m.value }}" {% if m.value == filtro_modalita %}selected{% endif %}>{{ m.value.replace('_', ' ') }}</option>
-        {% endfor %}
-      </select>
-    </div>
     <button type="submit" class="btn btn--secondario">Filtra</button>
-    {% if filtro_da or filtro_a or filtro_stato or filtro_modalita %}
+    {% if filtro_anno or filtro_mese or filtro_stato %}
     <a href="/" class="btn btn--secondario">Azzera</a>
     {% endif %}
   </form>
 
   <div class="kpi-grid">
     <div class="kpi-card">
-      <div class="kpi-card__etichetta">Elaborazioni</div>
-      <div class="kpi-card__valore">{{ job_totali }}</div>
+      <div class="kpi-card__etichetta">Lotti</div>
+      <div class="kpi-card__valore">{{ lotti_totali }}</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-card__etichetta">Prescrizioni elaborate</div>
@@ -79,11 +80,11 @@
     </div>
   </div>
 
-  <h3 style="font-size:14px; margin: 24px 0 12px;">Difformita per tipo</h3>
-  {% if difformita_per_tipo %}
-    {% for tipo, conteggio in difformita_per_tipo.items() %}
+  <h3 style="font-size:14px; margin: 24px 0 12px;">Difformita per codice</h3>
+  {% if difformita_per_codice %}
+    {% for codice, conteggio in difformita_per_codice.items() %}
     <div class="barra-riga">
-      <div class="barra-riga__etichetta">{{ tipo }}</div>
+      <div class="barra-riga__etichetta">{{ codice }}</div>
       <div class="barra-riga__traccia">
         <div class="barra-riga__riempimento" style="width: {{ (conteggio / max_difformita * 100) | round(0, 'floor') }}%;"></div>
       </div>

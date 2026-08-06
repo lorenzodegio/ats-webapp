@@ -5,7 +5,7 @@
 <div class="main__header">
   <div>
     <h1>Archivio</h1>
-    <div class="sottotitolo">Storico prescrizioni elaborate, ricercabili per barcode</div>
+    <div class="sottotitolo">Storico prescrizioni, ricercabili per barcode across tutti i lotti</div>
   </div>
 </div>
 
@@ -21,20 +21,22 @@
     <thead>
       <tr>
         <th>Barcode</th>
-        <th>File origine</th>
-        <th>Excel scritto</th>
+        <th>Lotto</th>
+        <th>Stato barcode</th>
+        <th>Score OCR</th>
         <th>Difformita</th>
-        <th>Elaborata il</th>
+        <th>Creata il</th>
       </tr>
     </thead>
     <tbody>
       {% for p in prescrizioni %}
-      <tr>
-        <td class="mono">{{ p.barcode }}</td>
-        <td>{{ p.job.nome_file_origine if p.job else '—' }}</td>
-        <td>{% if p.excel_scritto %}<span class="badge badge--completato">Si</span>{% else %}<span class="badge badge--in-coda">No</span>{% endif %}</td>
-        <td>{{ p.difformita|length }}</td>
-        <td>{{ p.creato_il.strftime("%d/%m/%Y %H:%M") }}</td>
+      <tr class="riga-cliccabile" onclick="window.location='/lotti/{{ p.lotto_id }}'">
+        <td class="mono">{{ p.barcode or '—' }}</td>
+        <td>{{ p.lotto.nome if p.lotto else '—' }}</td>
+        <td class="mono" style="font-size:12px;">{{ p.stato_barcode.value.replace('_', ' ') }}</td>
+        <td>{{ p.score_ocr or '—' }}</td>
+        <td>{{ p.difformita | length }}</td>
+        <td>{{ p.created_at.strftime("%d/%m/%Y %H:%M") }}</td>
       </tr>
       {% endfor %}
     </tbody>

@@ -1,4 +1,4 @@
-"""Router archivio: /archivio /difformita"""
+"""Router archivio: /archivio — storico prescrizioni ricercabile per barcode, cross-lotto."""
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -19,10 +19,10 @@ def archivio(
     db: Session = Depends(get_db),
     utente: Utente = Depends(get_utente_corrente),
 ):
-    query = db.query(Prescrizione).options(joinedload(Prescrizione.job))
+    query = db.query(Prescrizione).options(joinedload(Prescrizione.lotto), joinedload(Prescrizione.dati_ocr))
     if q:
         query = query.filter(Prescrizione.barcode.ilike(f"%{q}%"))
-    prescrizioni = query.order_by(Prescrizione.creato_il.desc()).limit(200).all()
+    prescrizioni = query.order_by(Prescrizione.created_at.desc()).limit(200).all()
 
     return templates.TemplateResponse(
         "archivio.html",
@@ -34,4 +34,3 @@ def archivio(
             "q": q,
         },
     )
-

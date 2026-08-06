@@ -36,7 +36,7 @@ def esegui_login(
             url="/login?errore=Credenziali+non+valide", status_code=302
         )
 
-    request.session["utente_id"] = utente.id
+    request.session["utente_id"] = str(utente.id)
     request.session["nome_completo"] = utente.nome_completo
     request.session["ruolo"] = utente.ruolo.value
     return RedirectResponse(url="/", status_code=302)

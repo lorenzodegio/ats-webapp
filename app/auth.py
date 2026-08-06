@@ -5,6 +5,7 @@ Sessione server-side gestita da Starlette SessionMiddleware (cookie firmato).
 from typing import Optional
 
 import bcrypt
+import uuid
 from fastapi import Request, Depends
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
@@ -25,9 +26,13 @@ def verifica_password(password: str, password_hash: str) -> bool:
 
 
 def get_utente_opzionale(request: Request, db: Session = Depends(get_db)) -> Optional[Utente]:
-    """Ritorna l'utente loggato se presente in sessione, altrimenti None. Non reindirizza."""
     utente_id = request.session.get("utente_id")
     if not utente_id:
+        return None
+    try:
+        uuid.UUID(str(utente_id))
+    except (ValueError, AttributeError, TypeError):
+        request.session.clear()
         return None
     return db.query(Utente).filter(Utente.id == utente_id).first()
 

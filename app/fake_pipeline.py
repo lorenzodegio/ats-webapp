@@ -1,16 +1,22 @@
 """
-BACKEND FINTO (mock) — sostituisce temporaneamente le chiamate reali ai
-container Docker delle 4 fasi (Sezione 2 del documento di progetto).
+BACKEND FINTO (mock) — sostituisce temporaneamente l'avvio reale dei
+container Docker (Sezione "Flusso caricamento -> elaborazione ->
+archiviazione" dello schema). Rispetta lo stesso contratto di entita'
+(Elaborazione, LogElaborazione, Prescrizione, DatiOcr, Difformita) che
+usera' l'integrazione reale.
 
-Obiettivo: permettere lo sviluppo del frontend in autonomia, rispettando
-esattamente lo stesso contratto (stati di Job, Prescrizione, Difformita)
-che userà l'integrazione reale fatta da Alessandro e Francesco.
+I file (PDF/PNG/JSON/Excel) vengono comunque scritti per davvero, ma
+in una cartella locale ./sharepoint_finto/ invece che sul vero
+SharePoint montato: cosi' il principio "SharePoint e' il filesystem,
+il DB salva solo percorsi relativi" resta vero anche in sviluppo, senza
+bisogno di avere OneDrive sincronizzato sulla macchina.
 
-Quando il backend reale sarà collegato, basterà sostituire la funzione
-`elabora_job_fake` con la chiamata reale ai container, senza toccare le
-route ne' i template: il contratto (stati, campi) resta identico.
+Quando il backend reale sara' pronto, queste tre funzioni vanno
+sostituite dalle chiamate reali ai container Docker (che scriveranno
+sul percorso SharePoint vero, letto da Configurazione.sharepoint_base_path).
 """
 import json
+import os
 import random
 import time
 from datetime import datetime
@@ -18,143 +24,260 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models import Job, Prescrizione, Difformita, StatoJob, Gravita
+from app.models import (
+    LottoMensile, StatoLotto, Elaborazione, FaseElaborazione, StatoElaborazione,
+    LogElaborazione, LivelloLog, Prescrizione, StatoBarcode, DatiOcr,
+    Difformita, StatoDifformita,
+)
+from app.generatore_finto import genera_barcode, genera_dati_ocr_finti, CODICI_DIFFORMITA
 
-# Tempi (secondi) di permanenza in ciascuna fase, per simulare una
-# elaborazione realistica senza dover aspettare i tempi reali della pipeline.
-DURATA_FASE = {
-    StatoJob.fase1_preprocessing: 2,
-    StatoJob.fase2_ocr: 4,
-    StatoJob.fase3_excel: 1,
-    StatoJob.fase4_difformita: 2,
-}
+FAKE_SP_ROOT = "sharepoint_finto"
 
-TIPI_DIFFORMITA = [
-    ("TDL", "Dosaggio giornaliero fuori range terapeutico previsto"),
-    ("TAL", "Durata terapia non conforme alla prescrizione autorizzata"),
-    ("TOL", "Quantita totale prescritta non coerente con la posologia"),
-    ("FIRMA_MANCANTE", "Firma del medico prescrittore non rilevata"),
-    ("CODICE_ATC_INCOERENTE", "Codice ATC non corrispondente al principio attivo"),
-    ("BARCODE_ILLEGGIBILE", "Barcode rilevato con confidenza bassa, verifica manuale consigliata"),
-]
-
-NOMI = ["Mario Rossi", "Anna Bianchi", "Luca Verdi", "Giulia Ferrari", "Marco Colombo",
-        "Sara Ricci", "Davide Marino", "Elena Greco", "Paolo Conti", "Chiara Villa"]
-
-PRINCIPI_ATTIVI = ["FM2 Cannabis", "Bedrocan", "Bediol", "Pedanios 22/1", "Bedica"]
-
-
-def _genera_barcode() -> str:
-    return f"{random.randint(8000, 8999)}-{random.randint(100, 999)}"
-
-
-def _genera_dati_estratti() -> dict:
-    """Simula i 24 campi strutturati che la fase 2 (Qwen2.5-VL) estrarrebbe davvero."""
-    return {
-        "paziente": random.choice(NOMI),
-        "medico_prescrittore": f"Dr. {random.choice(NOMI)}",
-        "principio_attivo": random.choice(PRINCIPI_ATTIVI),
-        "dosaggio_giornaliero_mg": random.choice([300, 500, 600, 900]),
-        "durata_terapia_giorni": random.choice([30, 60, 90]),
-        "quantita_totale_g": round(random.uniform(10, 60), 1),
-        "data_prescrizione": datetime.utcnow().strftime("%Y-%m-%d"),
-        "codice_ats": f"ATS-{random.randint(1000, 9999)}",
-    }
-
-
-MESSAGGI_ERRORE_FINTI = [
-    "Impossibile leggere il barcode su 2 pagine del PDF caricato",
-    "Timeout del modello OCR durante l'estrazione dei campi",
-    "File Excel regionale di destinazione non raggiungibile (percorso OneDrive)",
-]
-
-# Probabilita' (0-1) che, per scopo dimostrativo, un job finto si interrompa
-# in errore durante una fase. Nel backend reale l'errore sara' quello vero
+# Probabilita' (0-1) di simulare un'eccezione durante una fase, solo a
+# scopo dimostrativo: nel backend reale l'errore sara' quello vero
 # sollevato dal container Docker corrispondente.
-PROBABILITA_ERRORE_FINTO = 0.08
+PROBABILITA_ECCEZIONE_FINTA = 0.08
 
 
-def elabora_job_fake(job_id: int, numero_prescrizioni: int) -> None:
-    """
-    Simula in modo sincrono (girera' su un BackgroundTask di FastAPI) le
-    4 fasi della pipeline per un job, avanzando lo stato nel DB passo passo
-    cosi' che la pagina "Elaborazioni" possa mostrare il progresso in polling.
+def _percorso_assoluto(percorso_relativo: str) -> str:
+    path = os.path.join(FAKE_SP_ROOT, percorso_relativo)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    return path
 
-    Ad ogni fase completata con successo aggiorna anche
-    `ultima_fase_completata`, cosi' se il job si ferma in errore resta
-    tracciato "dove" si era arrivato.
-    """
+
+def _scrivi_file_finto(percorso_relativo: str, contenuto: str = "") -> None:
+    path = _percorso_assoluto(percorso_relativo)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(contenuto)
+
+
+def _log(db: Session, elaborazione: Elaborazione, messaggio: str, livello: LivelloLog = LivelloLog.info) -> None:
+    db.add(LogElaborazione(elaborazione_id=elaborazione.id, messaggio=messaggio, livello=livello))
+    db.commit()
+
+
+def _forse_eccezione(db: Session, lotto: LottoMensile, elaborazione: Elaborazione, fase_label: str) -> bool:
+    """Ritorna True se ha simulato un'eccezione (e ha gia' salvato tutto)."""
+    if random.random() >= PROBABILITA_ECCEZIONE_FINTA:
+        return False
+    messaggio = f"Eccezione simulata durante '{fase_label}': container terminato con errore"
+    _log(db, elaborazione, messaggio, LivelloLog.error)
+    elaborazione.stato = StatoElaborazione.errore
+    elaborazione.exit_code = 1
+    elaborazione.finished_at = datetime.utcnow()
+    lotto.stato = StatoLotto.eccezione
+    lotto.note = ((lotto.note or "") + f"\n[{datetime.utcnow():%d/%m %H:%M}] {messaggio}").strip()
+    lotto.updated_at = datetime.utcnow()
+    db.commit()
+    return True
+
+
+def avvia_preprocessing_fake(lotto_id) -> None:
+    """Fase 1: split PDF, lettura barcode, deskew. Crea le Prescrizioni."""
     db: Session = SessionLocal()
     try:
-        job = db.query(Job).filter(Job.id == job_id).first()
-        if job is None:
+        lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
+        if lotto is None:
             return
 
-        sequenza = [
-            StatoJob.fase1_preprocessing,
-            StatoJob.fase2_ocr,
-            StatoJob.fase3_excel,
-            StatoJob.fase4_difformita,
-        ]
+        elaborazione = Elaborazione(
+            lotto_id=lotto.id, fase=FaseElaborazione.preprocessing,
+            stato=StatoElaborazione.in_corso,
+            comando_docker=f"docker compose run preprocessing --lotto {lotto.nome}",
+            started_at=datetime.utcnow(),
+        )
+        db.add(elaborazione)
+        db.commit()
 
-        for fase in sequenza:
-            job.stato = fase
-            job.aggiornato_il = datetime.utcnow()
-            db.commit()
-            time.sleep(DURATA_FASE[fase])
+        lotto.stato = StatoLotto.preprocessing
+        db.commit()
 
-            if fase == StatoJob.fase2_ocr:
-                # Fase 2: crea le prescrizioni con i dati estratti finti
-                for _ in range(numero_prescrizioni):
-                    presc = Prescrizione(
-                        job_id=job.id,
-                        barcode=_genera_barcode(),
-                        dati_estratti_json=json.dumps(_genera_dati_estratti(), ensure_ascii=False),
-                        excel_scritto=False,
-                    )
-                    db.add(presc)
-                db.commit()
+        _log(db, elaborazione, f"Avvio preprocessing per il lotto '{lotto.nome}'")
+        time.sleep(1)
+        _log(db, elaborazione, "Split del PDF combinato in singole prescrizioni")
+        time.sleep(1.5)
 
-            if fase == StatoJob.fase3_excel:
-                for presc in job.prescrizioni:
-                    presc.excel_scritto = True
-                db.commit()
+        if _forse_eccezione(db, lotto, elaborazione, "preprocessing"):
+            return
 
-            if fase == StatoJob.fase4_difformita:
-                for presc in job.prescrizioni:
-                    # circa 1 prescrizione su 4 riceve una difformita', come nei dati reali (~95% ok)
-                    if random.random() < 0.25:
-                        tipo, descrizione = random.choice(TIPI_DIFFORMITA)
-                        db.add(Difformita(
-                            prescrizione_id=presc.id,
-                            tipo=tipo,
-                            descrizione=descrizione,
-                            gravita=random.choice(list(Gravita)),
-                        ))
-                db.commit()
+        numero_prescrizioni = random.randint(6, 24)
+        n_letti = 0
+        for i in range(numero_prescrizioni):
+            barcode_letto = random.random() > 0.12  # ~88% barcode leggibili
+            barcode = genera_barcode() if barcode_letto else None
+            presc = Prescrizione(
+                lotto_id=lotto.id,
+                barcode=barcode,
+                stato_barcode=StatoBarcode.letto if barcode_letto else StatoBarcode.undefined,
+                sp_pdf_path=f"{lotto.sp_output_path}/CARTELLE FARMACIE/{barcode or f'undefined_{i}'}.pdf",
+                sp_png_path=f"{lotto.sp_output_path}/CARTELLE FARMACIE/{barcode or f'undefined_{i}'}.png",
+            )
+            db.add(presc)
+            _scrivi_file_finto(presc.sp_pdf_path, f"PDF finto prescrizione {barcode or 'undefined'}")
+            if barcode_letto:
+                n_letti += 1
+        db.commit()
 
-            # Simulazione (solo demo): possibilita' di errore dopo una fase
-            # completata con successo, per poter testare lo stato "errore".
-            if random.random() < PROBABILITA_ERRORE_FINTO:
-                job.ultima_fase_completata = fase
-                job.stato = StatoJob.errore
-                job.messaggio_errore = random.choice(MESSAGGI_ERRORE_FINTI)
-                job.aggiornato_il = datetime.utcnow()
-                db.commit()
-                return
+        lotto.n_pdf_caricati = 1
+        lotto.n_prescrizioni_totali = numero_prescrizioni
+        lotto.n_barcode_letti = n_letti
+        lotto.n_barcode_undefined = numero_prescrizioni - n_letti
+        lotto.updated_at = datetime.utcnow()
 
-            job.ultima_fase_completata = fase
-            db.commit()
+        elaborazione.stato = StatoElaborazione.completata
+        elaborazione.finished_at = datetime.utcnow()
+        elaborazione.exit_code = 0
+        elaborazione.n_processati = numero_prescrizioni
+        elaborazione.n_errori = 0
 
-        job.stato = StatoJob.completato
-        job.aggiornato_il = datetime.utcnow()
+        lotto.stato = StatoLotto.revisione_barcode
+        _log(db, elaborazione, f"Preprocessing completato: {numero_prescrizioni} prescrizioni, {n_letti} barcode letti, {numero_prescrizioni - n_letti} da rivedere")
         db.commit()
 
     except Exception as exc:  # pragma: no cover - solo per il mock
-        job = db.query(Job).filter(Job.id == job_id).first()
-        if job:
-            job.stato = StatoJob.errore
-            job.messaggio_errore = str(exc)
+        lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
+        if lotto:
+            lotto.stato = StatoLotto.eccezione
+            lotto.note = ((lotto.note or "") + f"\n{exc}").strip()
+            db.commit()
+    finally:
+        db.close()
+
+
+def avvia_ocr_fake(lotto_id) -> None:
+    """Fase 2: estrazione VLLM dei 24 campi per ogni prescrizione."""
+    db: Session = SessionLocal()
+    try:
+        lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
+        if lotto is None:
+            return
+
+        elaborazione = Elaborazione(
+            lotto_id=lotto.id, fase=FaseElaborazione.vllm,
+            stato=StatoElaborazione.in_corso,
+            comando_docker=f"docker compose run ocr-vllm --lotto {lotto.nome}",
+            started_at=datetime.utcnow(),
+        )
+        db.add(elaborazione)
+        lotto.stato = StatoLotto.elaborazione_ocr
+        db.commit()
+
+        _log(db, elaborazione, "Avvio estrazione OCR (Qwen2.5-VL) sulle prescrizioni")
+        time.sleep(1)
+
+        prescrizioni = db.query(Prescrizione).filter(Prescrizione.lotto_id == lotto.id).all()
+        n_match = 0
+        somma_score = 0.0
+        for presc in prescrizioni:
+            time.sleep(0.15)
+            if _forse_eccezione(db, lotto, elaborazione, "elaborazione OCR"):
+                return
+
+            dati = genera_dati_ocr_finti()
+            score = round(random.uniform(72, 99), 2)
+            somma_score += score
+
+            dati_ocr = DatiOcr(
+                prescrizione_id=presc.id,
+                json_vllm_raw={k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in dati.items()},
+                extracted_at=datetime.utcnow(),
+                **dati,
+            )
+            db.add(dati_ocr)
+
+            presc.score_ocr = score
+            presc.n_campi_compilati = random.randint(20, 24)
+            presc.barcode_in_excel = random.random() > 0.1
+            if presc.barcode_in_excel:
+                presc.riga_excel = random.randint(2, 300)
+                n_match += 1
+            presc.sp_json_path = presc.sp_pdf_path.replace(".pdf", ".json") if presc.sp_pdf_path else None
+            if presc.sp_json_path:
+                _scrivi_file_finto(presc.sp_json_path, json.dumps(dati_ocr.json_vllm_raw, ensure_ascii=False, indent=2))
+
+        db.commit()
+
+        lotto.n_match_excel = n_match
+        lotto.score_ocr_medio = round(somma_score / len(prescrizioni), 2) if prescrizioni else None
+        lotto.updated_at = datetime.utcnow()
+
+        elaborazione.stato = StatoElaborazione.completata
+        elaborazione.finished_at = datetime.utcnow()
+        elaborazione.exit_code = 0
+        elaborazione.n_processati = len(prescrizioni)
+
+        lotto.stato = StatoLotto.revisione_qualita
+        _log(db, elaborazione, f"OCR completato su {len(prescrizioni)} prescrizioni, score medio {lotto.score_ocr_medio}")
+        db.commit()
+
+    except Exception as exc:  # pragma: no cover
+        lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
+        if lotto:
+            lotto.stato = StatoLotto.eccezione
+            lotto.note = ((lotto.note or "") + f"\n{exc}").strip()
+            db.commit()
+    finally:
+        db.close()
+
+
+def avvia_difformita_fake(lotto_id) -> None:
+    """Fase 4: analisi di 19 tipologie di non conformita (qui simulate)."""
+    db: Session = SessionLocal()
+    try:
+        lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
+        if lotto is None:
+            return
+
+        elaborazione = Elaborazione(
+            lotto_id=lotto.id, fase=FaseElaborazione.difformita,
+            stato=StatoElaborazione.in_corso,
+            comando_docker=f"docker compose run difformita --lotto {lotto.nome}",
+            started_at=datetime.utcnow(),
+        )
+        db.add(elaborazione)
+        lotto.stato = StatoLotto.analisi_difformita
+        db.commit()
+
+        _log(db, elaborazione, "Avvio analisi delle non conformita regolamentari")
+        time.sleep(1.5)
+
+        if _forse_eccezione(db, lotto, elaborazione, "analisi difformita"):
+            return
+
+        prescrizioni = db.query(Prescrizione).filter(Prescrizione.lotto_id == lotto.id).all()
+        n_con_difformita = 0
+        n_difformita_totali = 0
+        for presc in prescrizioni:
+            if random.random() < 0.25:
+                n_di_questa = random.randint(1, 2)
+                for _ in range(n_di_questa):
+                    codice, descrizione = random.choice(CODICI_DIFFORMITA)
+                    db.add(Difformita(
+                        prescrizione_id=presc.id, codice=codice, descrizione=descrizione,
+                        stato=StatoDifformita.rilevata,
+                    ))
+                n_con_difformita += 1
+                n_difformita_totali += n_di_questa
+        db.commit()
+
+        lotto.n_difformita_totali = n_difformita_totali
+        lotto.n_prescrizioni_con_difformita = n_con_difformita
+        lotto.updated_at = datetime.utcnow()
+
+        elaborazione.stato = StatoElaborazione.completata
+        elaborazione.finished_at = datetime.utcnow()
+        elaborazione.exit_code = 0
+        elaborazione.n_processati = len(prescrizioni)
+
+        lotto.stato = StatoLotto.revisione_difformita
+        _log(db, elaborazione, f"Analisi completata: {n_difformita_totali} difformita su {n_con_difformita} prescrizioni")
+        db.commit()
+
+    except Exception as exc:  # pragma: no cover
+        lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
+        if lotto:
+            lotto.stato = StatoLotto.eccezione
+            lotto.note = ((lotto.note or "") + f"\n{exc}").strip()
             db.commit()
     finally:
         db.close()

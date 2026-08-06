@@ -1,11 +1,19 @@
-{# Partial riutilizzato ovunque venga mostrato lo stato di un Job #}
-{% set s = job.stato.value %}
-{% if s == "completato" %}
-  <span class="badge badge--completato"><span class="badge__puntino"></span>Completata</span>
-{% elif s == "errore" %}
-  <span class="badge badge--errore"><span class="badge__puntino"></span>Errore</span>
-{% elif s == "in_coda" %}
-  <span class="badge badge--in-coda"><span class="badge__puntino"></span>In coda</span>
+{# Partial riutilizzato ovunque venga mostrato lo stato di un Lotto Mensile #}
+{% set s = lotto.stato.value %}
+{% if s == "archiviato" %}
+  <span class="badge badge--completato"><span class="badge__puntino"></span>Archiviato</span>
+{% elif s == "completato" %}
+  <span class="badge badge--completato"><span class="badge__puntino"></span>Completato</span>
+{% elif s == "eccezione" %}
+  <span class="badge badge--errore"><span class="badge__puntino"></span>Eccezione</span>
+{% elif s == "revisione_barcode" %}
+  <span class="badge badge--attesa"><span class="badge__puntino"></span>Revisione barcode</span>
+{% elif s == "revisione_qualita" %}
+  <span class="badge badge--attesa"><span class="badge__puntino"></span>Revisione qualita</span>
+{% elif s == "revisione_difformita" %}
+  <span class="badge badge--attesa"><span class="badge__puntino"></span>Revisione difformita</span>
+{% elif s == "bozza" %}
+  <span class="badge badge--in-coda"><span class="badge__puntino"></span>Bozza</span>
 {% else %}
-  <span class="badge badge--in-corso"><span class="badge__puntino"></span>In corso &middot; {{ s.replace('fase', 'fase ').replace('_', ' ') }}</span>
+  <span class="badge badge--in-corso"><span class="badge__puntino"></span>{{ s.replace('_', ' ') }}</span>
 {% endif %}

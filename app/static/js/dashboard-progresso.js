@@ -1,8 +1,8 @@
 /* dashboard-progresso.js
-   Aggiorna via polling l'avanzamento delle elaborazioni mostrate nel
-   pannello "In corso ora" della dashboard. Se un'elaborazione si
-   conclude (completata o in errore), ricarica la pagina per aggiornare
-   sia il pannello "in corso" sia la panoramica generale sottostante.
+   Aggiorna via polling l'avanzamento dei lotti mostrati nel pannello
+   "In corso ora" della dashboard. Se un lotto si conclude o va in
+   eccezione, ricarica la pagina per aggiornare sia il pannello che la
+   panoramica generale sottostante.
 */
 (function () {
   async function aggiornaRighe() {
@@ -14,14 +14,15 @@
     await Promise.all(
       righe.map(async (riga) => {
         try {
-          const risposta = await fetch(`/jobs/${riga.dataset.jobId}/stato`);
+          const risposta = await fetch(`/lotti/${riga.dataset.lottoId}/stato`);
           if (!risposta.ok) return;
           const dati = await risposta.json();
 
-          riga.querySelector(".job-attivo-riga__fase").textContent = dati.etichetta_fase;
+          const etichettaFase = dati.fase_attiva ? `${dati.etichetta_stato} · ${dati.fase_attiva}` : dati.etichetta_stato;
+          riga.querySelector(".job-attivo-riga__fase").textContent = etichettaFase;
           riga.querySelector(".barra-progresso__riempimento").style.width = `${dati.percentuale}%`;
 
-          if (dati.stato === "completato" || dati.stato === "errore") {
+          if (["completato", "archiviato", "eccezione"].includes(dati.stato)) {
             qualcunoConcluso = true;
           }
         } catch (err) {

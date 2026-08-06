@@ -11,7 +11,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.database import Base, engine
 from app.auth import RedirectLogin
-from app.routers import auth_router, dashboard, jobs, archivio
+from app.routers import auth_router, dashboard, lotti, archivio
 
 # Crea le tabelle se non esistono (per dev; in produzione si userebbe Alembic)
 Base.metadata.create_all(bind=engine)
@@ -25,7 +25,7 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 app.include_router(auth_router.router)
 app.include_router(dashboard.router)
-app.include_router(jobs.router)
+app.include_router(lotti.router)
 app.include_router(archivio.router)
 
 
