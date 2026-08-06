@@ -5,27 +5,81 @@
 <div class="main__header">
   <div>
     <h1>Dashboard</h1>
-    <div class="sottotitolo">Panoramica delle elaborazioni e delle non conformita rilevate</div>
+    <div class="sottotitolo">Cruscotto operativo: cosa sta succedendo ora e panoramica generale</div>
   </div>
 </div>
 
-<div class="kpi-grid">
-  <div class="kpi-card">
-    <div class="kpi-card__etichetta">Prescrizioni elaborate</div>
-    <div class="kpi-card__valore">{{ prescrizioni_totali }}</div>
-  </div>
-  <div class="kpi-card kpi-card--accento">
-    <div class="kpi-card__etichetta">Difformita rilevate</div>
-    <div class="kpi-card__valore">{{ difformita_totali }}</div>
-  </div>
-  <div class="kpi-card">
-    <div class="kpi-card__etichetta">In coda / in corso</div>
-    <div class="kpi-card__valore">{{ job_in_coda }}</div>
-  </div>
+<div class="card" id="pannello-in-corso">
+  <h2 class="card__titolo">In corso ora</h2>
+  {% if job_attivi_vista %}
+    {% for voce in job_attivi_vista %}
+    <div class="job-attivo-riga" data-job-id="{{ voce.job.id }}">
+      <div class="job-attivo-riga__testa">
+        <a href="/jobs/{{ voce.job.id }}" class="job-attivo-riga__nome">{{ voce.job.nome }}</a>
+        <span class="job-attivo-riga__fase">{{ voce.etichetta_fase }}</span>
+      </div>
+      <div class="barra-progresso">
+        <div class="barra-progresso__riempimento" style="width: {{ voce.percentuale }}%;"></div>
+      </div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="stato-vuoto">Nessuna elaborazione in corso al momento. <a href="/jobs/nuovo" style="color: var(--sage); font-weight:600;">Avviane una &rarr;</a></div>
+  {% endif %}
 </div>
 
 <div class="card">
-  <h2 class="card__titolo">Difformita per tipo</h2>
+  <h2 class="card__titolo">Panoramica generale</h2>
+
+  <form method="get" action="/" class="filtri-riga filtri-riga--dashboard">
+    <div class="campo campo--filtro">
+      <label>Da</label>
+      <input type="date" name="da" value="{{ filtro_da }}">
+    </div>
+    <div class="campo campo--filtro">
+      <label>A</label>
+      <input type="date" name="a" value="{{ filtro_a }}">
+    </div>
+    <div class="campo campo--filtro">
+      <label>Stato</label>
+      <select name="stato">
+        <option value="">Tutti</option>
+        {% for s in stati_disponibili %}
+        <option value="{{ s.value }}" {% if s.value == filtro_stato %}selected{% endif %}>{{ s.value.replace('_', ' ') }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="campo campo--filtro">
+      <label>Modalita</label>
+      <select name="modalita">
+        <option value="">Tutte</option>
+        {% for m in modalita_disponibili %}
+        <option value="{{ m.value }}" {% if m.value == filtro_modalita %}selected{% endif %}>{{ m.value.replace('_', ' ') }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn btn--secondario">Filtra</button>
+    {% if filtro_da or filtro_a or filtro_stato or filtro_modalita %}
+    <a href="/" class="btn btn--secondario">Azzera</a>
+    {% endif %}
+  </form>
+
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="kpi-card__etichetta">Elaborazioni</div>
+      <div class="kpi-card__valore">{{ job_totali }}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-card__etichetta">Prescrizioni elaborate</div>
+      <div class="kpi-card__valore">{{ prescrizioni_totali }}</div>
+    </div>
+    <div class="kpi-card kpi-card--accento">
+      <div class="kpi-card__etichetta">Difformita rilevate</div>
+      <div class="kpi-card__valore">{{ difformita_totali }}</div>
+    </div>
+  </div>
+
+  <h3 style="font-size:14px; margin: 24px 0 12px;">Difformita per tipo</h3>
   {% if difformita_per_tipo %}
     {% for tipo, conteggio in difformita_per_tipo.items() %}
     <div class="barra-riga">
@@ -37,35 +91,11 @@
     </div>
     {% endfor %}
   {% else %}
-    <div class="stato-vuoto">Nessuna difformita rilevata finora.</div>
+    <div class="stato-vuoto">Nessuna difformita nel periodo/filtro selezionato.</div>
   {% endif %}
 </div>
+{% endblock %}
 
-<div class="card">
-  <h2 class="card__titolo">Ultime elaborazioni</h2>
-  {% if ultime_elaborazioni %}
-  <table class="tabella">
-    <thead>
-      <tr>
-        <th>File</th>
-        <th>Stato</th>
-        <th>Prescrizioni</th>
-        <th>Creato il</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for job in ultime_elaborazioni %}
-      <tr>
-        <td class="mono">{{ job.nome_file_origine }}</td>
-        <td>{% include "_badge_stato.html" %}</td>
-        <td>{{ job.numero_prescrizioni }}</td>
-        <td>{{ job.creato_il.strftime("%d/%m/%Y %H:%M") }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <div class="stato-vuoto">Nessuna elaborazione ancora avviata. <a href="/jobs/nuovo" style="color: var(--sage); font-weight:600;">Caricane una &rarr;</a></div>
-  {% endif %}
-</div>
+{% block script %}
+<script src="/static/js/dashboard-progresso.js"></script>
 {% endblock %}

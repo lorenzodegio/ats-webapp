@@ -416,6 +416,9 @@ table.tabella tr:last-child td { border-bottom: none; }
 .wizard-panel--attivo { display: block; }
 
 .dropzone {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
   border: 2px dashed var(--border-color);
   border-radius: var(--radius-card);
   padding: 48px 24px;
@@ -494,6 +497,70 @@ table.tabella tr:last-child td { border-bottom: none; }
   padding: 40px 20px;
   color: var(--text-secondary);
   font-size: 14px;
+}
+
+/* ---------- Pannello "in corso ora" ---------- */
+.job-attivo-riga {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+.job-attivo-riga:last-child { border-bottom: none; }
+
+.job-attivo-riga__testa {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.job-attivo-riga__nome {
+  font-weight: 600;
+  color: var(--forest);
+}
+.job-attivo-riga__nome:hover { text-decoration: underline; }
+
+.job-attivo-riga__fase {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.barra-progresso {
+  height: 8px;
+  background: var(--page-bg);
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+}
+
+.barra-progresso__riempimento {
+  height: 100%;
+  background: var(--sage);
+  border-radius: 6px;
+  transition: width 0.4s ease;
+}
+
+/* ---------- Righe tabella cliccabili (verso il dettaglio elaborazione) ---------- */
+.riga-cliccabile { cursor: pointer; }
+.riga-cliccabile:hover { background: rgba(107, 144, 128, 0.05); }
+
+/* ---------- Filtri dashboard ---------- */
+.filtri-riga--dashboard {
+  flex-wrap: wrap;
+  align-items: flex-end;
+  margin-bottom: 24px;
+}
+
+.campo--filtro {
+  margin-bottom: 0;
+}
+.campo--filtro label {
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.campo--filtro input, .campo--filtro select {
+  padding: 8px 10px;
+  font-size: 13px;
 }
 
 .pallino-gravita {

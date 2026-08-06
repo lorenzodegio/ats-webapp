@@ -6,6 +6,7 @@
   const TOTALE_STEP = 4;
   let stepCorrente = 1;
 
+  const inputNome = document.getElementById("input-nome");
   const inputFile = document.getElementById("input-file");
   const dropzone = document.getElementById("dropzone");
   const nomeFileEl = document.getElementById("nome-file-selezionato");
@@ -53,12 +54,16 @@
 
   function validaStepCorrente() {
     if (stepCorrente === 1) {
+      if (!inputNome.value.trim()) {
+        alert("Dai un nome all'elaborazione prima di continuare.");
+        return false;
+      }
       if (!inputFile.files || inputFile.files.length === 0) {
         alert("Seleziona un file PDF prima di continuare.");
         return false;
       }
-      const nome = inputFile.files[0].name.toLowerCase();
-      if (!nome.endsWith(".pdf")) {
+      const nomeFile = inputFile.files[0].name.toLowerCase();
+      if (!nomeFile.endsWith(".pdf")) {
         alert("Il file deve essere in formato PDF.");
         return false;
       }
@@ -67,6 +72,8 @@
   }
 
   function aggiornaRiepilogo() {
+    document.getElementById("riepilogo-nome").textContent = inputNome.value.trim() || "—";
+
     const fileSel = inputFile.files[0];
     document.getElementById("riepilogo-file").textContent = fileSel ? fileSel.name : "—";
 

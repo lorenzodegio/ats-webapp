@@ -33,6 +33,10 @@
 
     <!-- Step 1: Caricamento -->
     <div class="wizard-panel wizard-panel--attivo" data-step="1">
+      <div class="campo">
+        <label for="input-nome">Nome elaborazione</label>
+        <input type="text" id="input-nome" name="nome" placeholder="es. Lotto ASL Varese — agosto 2026" required>
+      </div>
       <label class="dropzone" id="dropzone" for="input-file">
         <div>Trascina qui il PDF, oppure clicca per selezionarlo</div>
         <div style="font-size:12px; margin-top:6px;">Formato accettato: .pdf</div>
@@ -68,6 +72,10 @@
 
     <!-- Step 3: Conferma -->
     <div class="wizard-panel" data-step="3">
+      <div class="riepilogo-riga">
+        <span class="riepilogo-riga__etichetta">Nome elaborazione</span>
+        <span class="riepilogo-riga__valore" id="riepilogo-nome">—</span>
+      </div>
       <div class="riepilogo-riga">
         <span class="riepilogo-riga__etichetta">File selezionato</span>
         <span class="riepilogo-riga__valore mono" id="riepilogo-file">—</span>

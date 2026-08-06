@@ -62,11 +62,27 @@ def _genera_dati_estratti() -> dict:
     }
 
 
+MESSAGGI_ERRORE_FINTI = [
+    "Impossibile leggere il barcode su 2 pagine del PDF caricato",
+    "Timeout del modello OCR durante l'estrazione dei campi",
+    "File Excel regionale di destinazione non raggiungibile (percorso OneDrive)",
+]
+
+# Probabilita' (0-1) che, per scopo dimostrativo, un job finto si interrompa
+# in errore durante una fase. Nel backend reale l'errore sara' quello vero
+# sollevato dal container Docker corrispondente.
+PROBABILITA_ERRORE_FINTO = 0.08
+
+
 def elabora_job_fake(job_id: int, numero_prescrizioni: int) -> None:
     """
     Simula in modo sincrono (girera' su un BackgroundTask di FastAPI) le
     4 fasi della pipeline per un job, avanzando lo stato nel DB passo passo
     cosi' che la pagina "Elaborazioni" possa mostrare il progresso in polling.
+
+    Ad ogni fase completata con successo aggiorna anche
+    `ultima_fase_completata`, cosi' se il job si ferma in errore resta
+    tracciato "dove" si era arrivato.
     """
     db: Session = SessionLocal()
     try:
@@ -116,6 +132,19 @@ def elabora_job_fake(job_id: int, numero_prescrizioni: int) -> None:
                             gravita=random.choice(list(Gravita)),
                         ))
                 db.commit()
+
+            # Simulazione (solo demo): possibilita' di errore dopo una fase
+            # completata con successo, per poter testare lo stato "errore".
+            if random.random() < PROBABILITA_ERRORE_FINTO:
+                job.ultima_fase_completata = fase
+                job.stato = StatoJob.errore
+                job.messaggio_errore = random.choice(MESSAGGI_ERRORE_FINTI)
+                job.aggiornato_il = datetime.utcnow()
+                db.commit()
+                return
+
+            job.ultima_fase_completata = fase
+            db.commit()
 
         job.stato = StatoJob.completato
         job.aggiornato_il = datetime.utcnow()

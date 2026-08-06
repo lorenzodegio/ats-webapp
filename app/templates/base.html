@@ -18,13 +18,10 @@
           <span class="sidebar__icon">+</span> Nuova elaborazione
         </a>
         <a href="/jobs" class="sidebar__link {% if voce_attiva == 'elaborazioni' %}sidebar__link--attivo{% endif %}">
-          <span class="sidebar__icon">&#9679;</span> Elaborazioni
+          <span class="sidebar__icon">&#9679;</span> Elaborazioni recenti
         </a>
         <a href="/archivio" class="sidebar__link {% if voce_attiva == 'archivio' %}sidebar__link--attivo{% endif %}">
           <span class="sidebar__icon">&#9776;</span> Archivio
-        </a>
-        <a href="/difformita" class="sidebar__link {% if voce_attiva == 'difformita' %}sidebar__link--attivo{% endif %}">
-          <span class="sidebar__icon">&#9888;</span> Difformita
         </a>
         {% if utente and utente.is_admin %}
         <a href="/impostazioni" class="sidebar__link {% if voce_attiva == 'impostazioni' %}sidebar__link--attivo{% endif %}">

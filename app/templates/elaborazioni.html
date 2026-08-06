@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block titolo %}Elaborazioni — ATS Cannabis OCR{% endblock %}
+{% block titolo %}Elaborazioni recenti — ATS Cannabis OCR{% endblock %}
 
 {% block contenuto %}
 <div class="main__header">
   <div>
-    <h1>Elaborazioni</h1>
-    <div class="sottotitolo">Stato dei job in coda, in corso e completati</div>
+    <h1>Elaborazioni recenti</h1>
+    <div class="sottotitolo">Le ultime {{ numero_recenti }} elaborazioni avviate. Clicca su una riga per vedere prescrizioni e difformita.</div>
   </div>
   <a href="/jobs/nuovo" class="btn btn--primario">+ Nuova elaborazione</a>
 </div>
@@ -15,7 +15,7 @@
   <table class="tabella" id="tabella-jobs">
     <thead>
       <tr>
-        <th>File</th>
+        <th>Nome elaborazione</th>
         <th>Modalita</th>
         <th>Stato</th>
         <th>Prescrizioni</th>
@@ -25,8 +25,9 @@
     </thead>
     <tbody>
       {% for job in jobs %}
-      <tr data-job-id="{{ job.id }}" data-job-attivo="{{ 'true' if job.stato.value not in ['completato', 'errore'] else 'false' }}">
-        <td class="mono">{{ job.nome_file_origine }}</td>
+      <tr data-job-id="{{ job.id }}" data-job-attivo="{{ 'true' if job.stato.value not in ['completato', 'errore'] else 'false' }}"
+          class="riga-cliccabile" onclick="window.location='/jobs/{{ job.id }}'">
+        <td><strong>{{ job.nome }}</strong><br><span class="mono" style="font-size:12px; color: var(--text-secondary);">{{ job.nome_file_origine }}</span></td>
         <td>{{ job.modalita.value.replace('_', ' ') }}</td>
         <td class="cella-stato">{% include "_badge_stato.html" %}</td>
         <td class="cella-prescrizioni">{{ job.numero_prescrizioni }}</td>

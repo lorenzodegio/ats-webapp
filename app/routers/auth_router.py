@@ -1,9 +1,10 @@
 """Router autenticazione: /login /logout"""
+from typing import Optional
+
 from fastapi import APIRouter, Request, Depends, Form
 from fastapi.responses import RedirectResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
-from typing import Optional
 
 from app.database import get_db
 from app.models import Utente

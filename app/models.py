@@ -61,8 +61,12 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id = Column(Integer, primary_key=True)
+    nome = Column(String(255), nullable=False)  # nome assegnato dall'operatore nel wizard
     nome_file_origine = Column(String(255), nullable=False)
     stato = Column(Enum(StatoJob), default=StatoJob.in_coda, index=True, nullable=False)
+    # ultima fase completata con successo: utile per sapere "dove si e' fermata"
+    # un'elaborazione quando stato == errore, senza perdere quel dato.
+    ultima_fase_completata = Column(Enum(StatoJob), nullable=True)
     modalita = Column(Enum(ModalitaJob), default=ModalitaJob.full, nullable=False)
     messaggio_errore = Column(String(500), nullable=True)
     creato_il = Column(DateTime, default=datetime.utcnow)
