@@ -1,0 +1,70 @@
+# docker-compose.yml
+# ---------------------
+# Le 4 fasi della pipeline, come da documento di progetto (Sezione 1.2
+# / 2.1), tutte costruite dalla stessa immagine (docker/Dockerfile) —
+# cambia solo il comando eseguito (vedi docker/run_fase.py).
+#
+# NOTA SULL'ORDINE: qui i servizi sono nominati fase1/2/3/4 secondo
+# l'ORDINE DI ESECUZIONE REALE (preprocessing, ocr, difformita, excel)
+# — differisce dal testo del documento (Sezione 1.2), che elenca Excel
+# come fase 03 e Difformità come fase 04. Vedi models.py (StatoJob) e
+# app/pipeline_docker.py per la spiegazione completa del perché.
+#
+# OLLAMA: gira già come container esistente ("ats-ollama", sulla rete
+# "ats-pipeline_default" — verificato con `docker inspect ats-ollama`).
+# I nostri 4 servizi si agganciano alla STESSA rete (dichiarata come
+# "external" qui sotto) per poterlo raggiungere per nome
+# ("http://ats-ollama:11434"), invece di passare da host.docker.internal.
+#
+# VOLUMI: tutte e 4 le fasi condividono la stessa cartella ./dati
+# (sul host), che corrisponde a /dati dentro ogni container — così
+# ogni fase trova quello che la fase precedente ha prodotto.
+
+networks:
+  ats-pipeline_default:
+    external: true
+
+services:
+  fase1-preprocessing:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["preprocessing"]
+    volumes:
+      - ./dati:/dati
+    networks:
+      - ats-pipeline_default
+
+  fase2-ocr:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["ocr"]
+    environment:
+      - OLLAMA_HOST=http://ats-ollama:11434
+    volumes:
+      - ./dati:/dati
+    networks:
+      - ats-pipeline_default
+
+  fase3-difformita:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["difformita"]
+    environment:
+      - OLLAMA_HOST=http://ats-ollama:11434
+    volumes:
+      - ./dati:/dati
+    networks:
+      - ats-pipeline_default
+
+  fase4-excel:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["excel"]
+    volumes:
+      - ./dati:/dati
+    networks:
+      - ats-pipeline_default

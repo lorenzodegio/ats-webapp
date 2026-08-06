@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+venv/
+.venv/
+.env
+ats_cannabis.db
+ats_webapp.db
+uploads/
+sharepoint_finto/
+dati/
+.DS_Store

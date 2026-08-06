@@ -1,0 +1,12 @@
+PyMuPDF
+opencv-python-headless
+numpy
+pillow
+pytesseract
+pyzbar
+deskew
+pandas
+openpyxl
+ollama
+easyocr
+torch

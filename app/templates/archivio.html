@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block titolo %}Archivio — ATS Cannabis OCR{% endblock %}
+
+{% block contenuto %}
+<div class="main__header">
+  <div>
+    <h1>Archivio</h1>
+    <div class="sottotitolo">Storico prescrizioni, ricercabili per barcode across tutti i lotti</div>
+  </div>
+</div>
+
+<div class="card">
+  <form method="get" action="/archivio" class="filtri-riga">
+    <input type="search" name="q" value="{{ q }}" placeholder="Cerca per barcode…" style="min-width:260px;">
+    <button type="submit" class="btn btn--secondario">Cerca</button>
+    {% if q %}<a href="/archivio" class="btn btn--secondario">Azzera</a>{% endif %}
+  </form>
+
+  {% if prescrizioni %}
+  <table class="tabella">
+    <thead>
+      <tr>
+        <th>Barcode</th>
+        <th>Lotto</th>
+        <th>Stato barcode</th>
+        <th>Score OCR</th>
+        <th>Difformita</th>
+        <th>Creata il</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in prescrizioni %}
+      <tr class="riga-cliccabile" onclick="window.location='/lotti/{{ p.lotto_id }}'">
+        <td class="mono">{{ p.barcode or '—' }}</td>
+        <td>{{ p.lotto.nome if p.lotto else '—' }}</td>
+        <td class="mono" style="font-size:12px;">{{ p.stato_barcode.value.replace('_', ' ') }}</td>
+        <td>{{ p.score_ocr or '—' }}</td>
+        <td>{{ p.difformita | length }}</td>
+        <td>{{ p.created_at.strftime("%d/%m/%Y %H:%M") }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="stato-vuoto">Nessuna prescrizione trovata{% if q %} per "{{ q }}"{% endif %}.</div>
+  {% endif %}
+</div>
+{% endblock %}

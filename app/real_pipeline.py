@@ -1,0 +1,508 @@
+"""
+BACKEND REALE — orchestra i 4 container Docker della pipeline OCR vera
+(integrazione portata dal lavoro di Francesco sul branch backend,
+riscritta per il modello dati lotti_mensili/UUID invece del vecchio
+Job/Integer).
+
+Differenza di fondo rispetto a fake_pipeline.py: qui i file DEVONO
+transitare per la cartella condivisa ./dati (montata nei container via
+docker-compose.yml) perche' e' li' che i container Docker leggono e
+scrivono. Il principio "SharePoint e' il filesystem" resta vero per lo
+STORAGE permanente (sharepoint_finto/ in sviluppo, il vero SharePoint
+in produzione): prima di ogni fase i file del lotto vengono copiati da
+li' a ./dati, dopo ogni fase i risultati vengono raccolti da ./dati e
+salvati nella posizione permanente del lotto.
+
+Vincolo importante: un solo lotto alla volta puo' avere un container in
+esecuzione, perche' tutti condividono la stessa cartella ./dati (stesso
+vincolo gia' imposto da Francesco con esiste_job_in_esecuzione, qui
+esiste_lotto_in_esecuzione). Lotti in fase di revisione (che non usano
+Docker) possono invece coesistere tranquillamente.
+
+NON TESTATO END-TO-END: scritto senza un ambiente Docker/Ollama
+disponibile. La logica di orchestrazione e il parsing dei JSON sono
+basati sulla lettura diretta del codice reale (ocr_cannabis.py,
+phase1_preprocess.py, phase5_difformita.py, run_fase.py), ma vanno
+verificati su una macchina con Docker Desktop + Ollama configurati
+prima di considerarli affidabili in produzione. Vedi il messaggio di
+consegna per l'elenco preciso dei punti da verificare.
+"""
+import json
+import logging
+import shutil
+import subprocess
+from datetime import datetime, date
+from pathlib import Path
+
+from sqlalchemy.orm import Session
+
+from app.database import SessionLocal
+from app.models import (
+    LottoMensile, StatoLotto, Elaborazione, FaseElaborazione, StatoElaborazione,
+    LogElaborazione, LivelloLog, Prescrizione, StatoBarcode, DatiOcr,
+    Difformita, StatoDifformita,
+)
+
+log = logging.getLogger("RealPipeline")
+
+# Cartella condivisa con i container Docker (stesso percorso di
+# docker-compose.yml: "./dati:/dati" per tutti e 4 i servizi)
+DATI_DIR = Path("dati")
+RICETTE_RAW = DATI_DIR / "ricette_raw"
+RICETTE_STAGING_IMAGES = DATI_DIR / "ricette_staging" / "images"
+RICETTE_STAGING_PDFS = DATI_DIR / "ricette_staging" / "pdfs"
+RICETTE = DATI_DIR / "ricette"
+EXCEL_REGIONE_DIR = DATI_DIR / "excel_regione"
+OUTPUT_DIR = DATI_DIR / "output"
+
+FAKE_SP_ROOT = "sharepoint_finto"  # stessa cartella usata da fake_pipeline.py
+
+FILE_JSON_DA_ESCLUDERE = {"riepilogo.json"}
+
+# Mappa dei campi realmente prodotti da ocr_cannabis.py verso i nomi
+# colonna di DatiOcr. Le chiavi identiche non sono elencate (mappate 1:1).
+# ATTENZIONE — due mapping non ovvi, da confermare con Francesco:
+#   - "nome_cognome_assistito" (reale) -> "cognome_nome_assistito" (schema):
+#     stesso dato, ordine delle parole diverso nel nome del campo.
+#   - "data_emissione" (reale) non esiste nello schema DatiOcr, che ha
+#     "data_invio": li ho considerati equivalenti (data di invio/emissione
+#     della prescrizione), ma e' un'assunzione mia, non confermata.
+#   - "THC" (reale, maiuscolo) -> "etichetta_thc" (schema).
+MAPPA_CAMPI_OCR = {
+    "nome_cognome_assistito": "cognome_nome_assistito",
+    "data_emissione": "data_invio",
+    "THC": "etichetta_thc",
+}
+
+CAMPI_DATA = {
+    "data_prescrizione", "data_etichetta_preparazione", "data_invio", "etichetta_data_scadenza",
+}
+CAMPI_BOOLEANI = {"timbro_medico", "firma_medico"}
+CAMPI_PREZZO = {
+    "etichetta_prezzo_sost", "etichetta_prezzo_on", "etichetta_prezzo_rec",
+    "etichetta_prezzo_iva", "etichetta_prezzo_tot", "totale_prescrizione",
+}
+
+COLONNE_DATI_OCR = {
+    "cognome_nome_assistito", "codice_fiscale", "codice_esenzione", "codice_atc",
+    "testo_prescrizione", "metodo_estrattivo_olio", "forma_farmaceutica",
+    "data_prescrizione", "data_etichetta_preparazione", "data_invio",
+    "etichetta_data_scadenza", "timbro_medico", "firma_medico",
+    "etichetta_nome_cognome_medico", "etichetta_nome_cognome_paziente",
+    "etichetta_prezzo_sost", "etichetta_prezzo_on", "etichetta_prezzo_rec",
+    "etichetta_prezzo_iva", "etichetta_prezzo_tot", "totale_prescrizione",
+    "etichetta_thc", "nome_farmacia", "etichetta_avvertenze",
+}
+
+
+class LottoGiaInEsecuzione(Exception):
+    pass
+
+
+def esiste_lotto_in_esecuzione(db: Session) -> bool:
+    stati_docker_attivi = (StatoLotto.preprocessing, StatoLotto.elaborazione_ocr, StatoLotto.analisi_difformita)
+    return db.query(LottoMensile).filter(LottoMensile.stato.in_(stati_docker_attivi)).first() is not None
+
+
+def _pulisci_cartella_dati():
+    """Svuota ./dati prima di ogni lotto: i container non devono vedere file del lotto precedente."""
+    if DATI_DIR.exists():
+        shutil.rmtree(DATI_DIR)
+    for cartella in (RICETTE_RAW, RICETTE_STAGING_IMAGES, RICETTE_STAGING_PDFS, RICETTE, EXCEL_REGIONE_DIR, OUTPUT_DIR):
+        cartella.mkdir(parents=True, exist_ok=True)
+
+
+def _log(db: Session, elaborazione: Elaborazione, messaggio: str, livello: LivelloLog = LivelloLog.info) -> None:
+    db.add(LogElaborazione(elaborazione_id=elaborazione.id, messaggio=messaggio, livello=livello))
+    db.commit()
+    getattr(log, livello.value if livello != LivelloLog.warning else "warning")(messaggio)
+
+
+def _esegui_container(nome_servizio: str) -> None:
+    """
+    Esegue un container Docker Compose e aspetta che finisca. Solleva
+    un'eccezione se il container termina con errore.
+
+    Presuppone: rete Docker esterna "ats-pipeline_default" gia' creata,
+    container "ats-ollama" gia' in esecuzione su quella rete (vedi
+    docker-compose.ollama.yml), e comando "docker" disponibile nel PATH
+    di chi esegue l'app web (Docker Desktop + WSL2 integration attiva).
+    """
+    comando = ["docker", "compose", "run", "--rm", nome_servizio]
+    log.info(f"Eseguo: {' '.join(comando)}")
+    risultato = subprocess.run(comando, capture_output=True, text=True)
+
+    if risultato.returncode != 0:
+        raise RuntimeError(
+            f"Container '{nome_servizio}' terminato con errore "
+            f"(codice {risultato.returncode}): {risultato.stderr[-800:]}"
+        )
+
+
+def _parse_data_italiana(valore):
+    """
+    I campi data prodotti dall'OCR sono stringhe in formato non
+    garantito al 100% (date_corrector.py esiste apposta per
+    normalizzarle) — provo i formati piu' comuni, altrimenti lascio
+    vuoto invece di far fallire l'intero import.
+    """
+    if not valore or not isinstance(valore, str):
+        return None
+    valore = valore.strip()
+    for formato in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(valore, formato).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_prezzo(valore):
+    if not valore:
+        return None
+    try:
+        return float(str(valore).replace(",", ".").replace("€", "").strip())
+    except ValueError:
+        return None
+
+
+def _normalizza_dati_ocr(dati_grezzi: dict) -> dict:
+    """Applica la mappa dei nomi campo e le conversioni di tipo, pronto per DatiOcr(**...)."""
+    normalizzato = {}
+    for chiave_reale, valore in dati_grezzi.items():
+        chiave = MAPPA_CAMPI_OCR.get(chiave_reale, chiave_reale)
+        if chiave not in COLONNE_DATI_OCR:
+            continue  # campo non mappato nello schema (es. barcode, _etichetta_rilevata_*)
+        if chiave in CAMPI_DATA:
+            normalizzato[chiave] = _parse_data_italiana(valore)
+        elif chiave in CAMPI_BOOLEANI:
+            normalizzato[chiave] = bool(valore) if valore != "" else None
+        elif chiave in CAMPI_PREZZO:
+            normalizzato[chiave] = _parse_prezzo(valore)
+        else:
+            normalizzato[chiave] = valore or None
+    return normalizzato
+
+
+def _copia_lotto_verso_dati(lotto: LottoMensile) -> None:
+    """Copia il PDF combinato e l'Excel Regione del lotto dallo storage permanente a ./dati."""
+    _pulisci_cartella_dati()
+
+    cartella_prescrizioni = Path(FAKE_SP_ROOT) / lotto.sp_prescrizioni_path
+    if cartella_prescrizioni.exists():
+        for pdf in cartella_prescrizioni.glob("*.pdf"):
+            shutil.copy2(pdf, RICETTE_RAW / pdf.name)
+
+    if lotto.excel_input_filename:
+        cartella_lavoro = Path(FAKE_SP_ROOT) / lotto.sp_lavoro_path
+        excel_path = cartella_lavoro / lotto.excel_input_filename
+        if excel_path.exists():
+            shutil.copy2(excel_path, EXCEL_REGIONE_DIR / excel_path.name)
+
+
+def avvia_preprocessing_reale(lotto_id) -> None:
+    db: Session = SessionLocal()
+    try:
+        lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
+        if lotto is None:
+            return
+        if esiste_lotto_in_esecuzione(db):
+            raise LottoGiaInEsecuzione()
+
+        elaborazione = Elaborazione(
+            lotto_id=lotto.id, fase=FaseElaborazione.preprocessing,
+            stato=StatoElaborazione.in_corso,
+            comando_docker="docker compose run --rm fase1-preprocessing",
+            started_at=datetime.utcnow(),
+        )
+        db.add(elaborazione)
+        lotto.stato = StatoLotto.preprocessing
+        db.commit()
+
+        _log(db, elaborazione, f"Copio i file del lotto '{lotto.nome}' in ./dati")
+        _copia_lotto_verso_dati(lotto)
+
+        _log(db, elaborazione, "Avvio container fase1-preprocessing")
+        _esegui_container("fase1-preprocessing")
+
+        # Nessun manifest JSON scritto dal container: ricostruisco
+        # l'elenco dalle cartelle di output, come fa run_fase.py stesso.
+        n_letti, n_undefined = 0, 0
+        for pdf in RICETTE.glob("*.pdf"):
+            barcode = pdf.stem
+            db.add(Prescrizione(
+                lotto_id=lotto.id, barcode=barcode, stato_barcode=StatoBarcode.letto,
+                sp_pdf_path=f"dati/ricette/{pdf.name}",
+                sp_png_path=f"dati/ricette/{barcode}.png",
+            ))
+            n_letti += 1
+
+        for png in RICETTE_STAGING_IMAGES.glob("undefined_*.png"):
+            db.add(Prescrizione(
+                lotto_id=lotto.id, barcode=None, stato_barcode=StatoBarcode.undefined,
+                sp_pdf_path=f"dati/ricette_staging/pdfs/{png.stem}.pdf",
+                sp_png_path=f"dati/ricette_staging/images/{png.name}",
+            ))
+            n_undefined += 1
+
+        db.commit()
+
+        lotto.n_pdf_caricati = len(list(RICETTE_RAW.glob("*.pdf")))
+        lotto.n_prescrizioni_totali = n_letti + n_undefined
+        lotto.n_barcode_letti = n_letti
+        lotto.n_barcode_undefined = n_undefined
+        lotto.updated_at = datetime.utcnow()
+
+        elaborazione.stato = StatoElaborazione.completata
+        elaborazione.finished_at = datetime.utcnow()
+        elaborazione.exit_code = 0
+        elaborazione.n_processati = n_letti + n_undefined
+
+        lotto.stato = StatoLotto.revisione_barcode
+        _log(db, elaborazione, f"Preprocessing completato: {n_letti} barcode letti, {n_undefined} da rivedere")
+        db.commit()
+
+    except Exception as exc:
+        log.exception("Errore in avvia_preprocessing_reale")
+        lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
+        if lotto:
+            lotto.stato = StatoLotto.eccezione
+            lotto.note = ((lotto.note or "") + f"\n[{datetime.utcnow():%d/%m %H:%M}] Preprocessing: {exc}").strip()
+            db.commit()
+    finally:
+        db.close()
+
+
+def correggi_barcode_reale(prescrizione_id, nuovo_barcode: str) -> None:
+    """
+    Oltre ad aggiornare il DB, sposta per davvero il file dalla cartella
+    di staging (ricette_staging/pdfs/undefined_*.pdf) a ./dati/ricette/,
+    rinominandolo col barcode corretto — altrimenti la fase OCR
+    successiva (che legge da ricette_dir) non lo troverebbe.
+    """
+    db: Session = SessionLocal()
+    try:
+        presc = db.query(Prescrizione).filter(Prescrizione.id == prescrizione_id).first()
+        if presc is None or presc.stato_barcode != StatoBarcode.undefined:
+            return
+
+        vecchio_stem = Path(presc.sp_pdf_path).stem if presc.sp_pdf_path else None
+        if vecchio_stem:
+            origine = RICETTE_STAGING_PDFS / f"{vecchio_stem}.pdf"
+            if origine.exists():
+                destinazione = RICETTE / f"{nuovo_barcode}.pdf"
+                shutil.move(str(origine), str(destinazione))
+                presc.sp_pdf_path = f"dati/ricette/{nuovo_barcode}.pdf"
+
+        presc.barcode = nuovo_barcode
+        presc.stato_barcode = StatoBarcode.corretto_manuale
+        db.commit()
+    finally:
+        db.close()
+
+
+def avvia_ocr_reale(lotto_id) -> None:
+    db: Session = SessionLocal()
+    try:
+        lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
+        if lotto is None:
+            return
+
+        elaborazione = Elaborazione(
+            lotto_id=lotto.id, fase=FaseElaborazione.vllm,
+            stato=StatoElaborazione.in_corso,
+            comando_docker="docker compose run --rm fase2-ocr",
+            started_at=datetime.utcnow(),
+        )
+        db.add(elaborazione)
+        lotto.stato = StatoLotto.elaborazione_ocr
+        db.commit()
+
+        _log(db, elaborazione, "Avvio container fase2-ocr (estrazione VLLM + arricchimento Regione)")
+        _esegui_container("fase2-ocr")
+
+        n_processati, n_match = 0, 0
+        for json_path in OUTPUT_DIR.glob("*.json"):
+            if json_path.name in FILE_JSON_DA_ESCLUDERE:
+                continue
+            dati_grezzi = json.loads(json_path.read_text(encoding="utf-8-sig"))
+            barcode = dati_grezzi.get("barcode") or json_path.stem
+
+            presc = db.query(Prescrizione).filter(
+                Prescrizione.lotto_id == lotto.id, Prescrizione.barcode == barcode
+            ).first()
+            if presc is None:
+                _log(db, elaborazione, f"Nessuna prescrizione trovata per barcode {barcode}, salto", LivelloLog.warning)
+                continue
+
+            campi_normalizzati = _normalizza_dati_ocr(dati_grezzi)
+            db.add(DatiOcr(
+                prescrizione_id=presc.id,
+                json_vllm_raw=dati_grezzi,
+                extracted_at=datetime.utcnow(),
+                **campi_normalizzati,
+            ))
+
+            presc.n_campi_compilati = sum(1 for v in campi_normalizzati.values() if v not in (None, ""))
+            presc.n_campi_totali = len(COLONNE_DATI_OCR)
+            # score_ocr non calcolato dalla pipeline reale (nessuna metrica di
+            # confidenza numerica prodotta) — resta vuoto finche' non ce n'e' una.
+            match_regione = str(dati_grezzi.get("CONTROLLO_CODICE_PRESCRIZIONE", "")).lower() == "true" \
+                or bool(dati_grezzi.get("LORDO_PRESC"))
+            presc.barcode_in_excel = match_regione
+            if match_regione:
+                n_match += 1
+            n_processati += 1
+
+        db.commit()
+
+        lotto.n_match_excel = n_match
+        lotto.updated_at = datetime.utcnow()
+
+        elaborazione.stato = StatoElaborazione.completata
+        elaborazione.finished_at = datetime.utcnow()
+        elaborazione.exit_code = 0
+        elaborazione.n_processati = n_processati
+
+        lotto.stato = StatoLotto.revisione_qualita
+        _log(db, elaborazione, f"OCR completato: {n_processati} prescrizioni elaborate, {n_match} con match Regione")
+        db.commit()
+
+    except Exception as exc:
+        log.exception("Errore in avvia_ocr_reale")
+        lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
+        if lotto:
+            lotto.stato = StatoLotto.eccezione
+            lotto.note = ((lotto.note or "") + f"\n[{datetime.utcnow():%d/%m %H:%M}] OCR: {exc}").strip()
+            db.commit()
+    finally:
+        db.close()
+
+
+def avvia_difformita_reale(lotto_id) -> None:
+    db: Session = SessionLocal()
+    try:
+        lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
+        if lotto is None:
+            return
+
+        elaborazione = Elaborazione(
+            lotto_id=lotto.id, fase=FaseElaborazione.difformita,
+            stato=StatoElaborazione.in_corso,
+            comando_docker="docker compose run --rm fase3-difformita",
+            started_at=datetime.utcnow(),
+        )
+        db.add(elaborazione)
+        lotto.stato = StatoLotto.analisi_difformita
+        db.commit()
+
+        _log(db, elaborazione, "Avvio container fase3-difformita")
+        _esegui_container("fase3-difformita")
+
+        n_con_difformita, n_difformita_totali = 0, 0
+        for json_path in OUTPUT_DIR.glob("*.json"):
+            if json_path.name in FILE_JSON_DA_ESCLUDERE:
+                continue
+            dati = json.loads(json_path.read_text(encoding="utf-8-sig"))
+            barcode = dati.get("barcode") or json_path.stem
+            codici = dati.get("difformita_codici", [])
+            descrizioni = dati.get("difformita_descrizioni", [])
+            if not codici:
+                continue
+
+            presc = db.query(Prescrizione).filter(
+                Prescrizione.lotto_id == lotto.id, Prescrizione.barcode == barcode
+            ).first()
+            if presc is None:
+                continue
+
+            # Evita duplicati se questa fase viene rilanciata sullo stesso lotto
+            db.query(Difformita).filter(Difformita.prescrizione_id == presc.id).delete()
+
+            for codice, descrizione in zip(codici, descrizioni):
+                db.add(Difformita(
+                    prescrizione_id=presc.id, codice=codice, descrizione=descrizione,
+                    stato=StatoDifformita.rilevata,
+                ))
+                n_difformita_totali += 1
+            n_con_difformita += 1
+
+        db.commit()
+
+        lotto.n_difformita_totali = n_difformita_totali
+        lotto.n_prescrizioni_con_difformita = n_con_difformita
+        lotto.updated_at = datetime.utcnow()
+
+        elaborazione.stato = StatoElaborazione.completata
+        elaborazione.finished_at = datetime.utcnow()
+        elaborazione.exit_code = 0
+        elaborazione.n_processati = n_con_difformita
+
+        lotto.stato = StatoLotto.revisione_difformita
+        _log(db, elaborazione, f"Analisi completata: {n_difformita_totali} difformita su {n_con_difformita} prescrizioni")
+        db.commit()
+
+    except Exception as exc:
+        log.exception("Errore in avvia_difformita_reale")
+        lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
+        if lotto:
+            lotto.stato = StatoLotto.eccezione
+            lotto.note = ((lotto.note or "") + f"\n[{datetime.utcnow():%d/%m %H:%M}] Difformita: {exc}").strip()
+            db.commit()
+    finally:
+        db.close()
+
+
+def scrivi_excel_finale_reale(lotto_id) -> bool:
+    """
+    Chiamata sincrona (non e' un BackgroundTask separato) dalla route
+    POST /lotti/{id}/completa, dopo la revisione difformita. Esegue il
+    container fase4-excel e copia il risultato nello storage permanente
+    del lotto. Ritorna False (senza sollevare eccezioni) se qualcosa
+    va storto, cosi' la route puo' decidere se bloccare il completamento.
+    """
+    db: Session = SessionLocal()
+    try:
+        lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
+        if lotto is None:
+            return False
+
+        elaborazione = Elaborazione(
+            lotto_id=lotto.id, fase=FaseElaborazione.completa,
+            stato=StatoElaborazione.in_corso,
+            comando_docker="docker compose run --rm fase4-excel",
+            started_at=datetime.utcnow(),
+        )
+        db.add(elaborazione)
+        db.commit()
+
+        _log(db, elaborazione, "Avvio container fase4-excel")
+        _esegui_container("fase4-excel")
+
+        file_excel_finale = next(OUTPUT_DIR.glob("*.xlsx"), None)
+        if file_excel_finale is None:
+            raise RuntimeError("Il container fase4-excel non ha prodotto nessun file .xlsx in /dati/output")
+
+        cartella_output_permanente = Path(FAKE_SP_ROOT) / lotto.sp_output_path
+        cartella_output_permanente.mkdir(parents=True, exist_ok=True)
+        destinazione = cartella_output_permanente / file_excel_finale.name
+        shutil.copy2(file_excel_finale, destinazione)
+
+        lotto.excel_output_filename = file_excel_finale.name
+        elaborazione.stato = StatoElaborazione.completata
+        elaborazione.finished_at = datetime.utcnow()
+        elaborazione.exit_code = 0
+        db.commit()
+
+        _log(db, elaborazione, f"Excel finale scritto: {destinazione}")
+        return True
+
+    except Exception as exc:
+        log.exception("Errore in scrivi_excel_finale_reale")
+        lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
+        if lotto:
+            lotto.note = ((lotto.note or "") + f"\n[{datetime.utcnow():%d/%m %H:%M}] Scrittura Excel: {exc}").strip()
+            db.commit()
+        return False
+    finally:
+        db.close()
