@@ -8,15 +8,15 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Utente
-from app.auth import verifica_password
+from app.auth import verifica_password, get_utente_opzionale
 
 router = APIRouter(tags=["auth"])
 templates = Jinja2Templates(directory="app/templates")
 
 
 @router.get("/login", response_class=HTMLResponse)
-def form_login(request: Request, errore: Optional[str] = None):
-    if request.session.get("utente_id"):
+def form_login(request: Request, errore: Optional[str] = None, db: Session = Depends(get_db)):
+    if get_utente_opzionale(request, db):
         return RedirectResponse(url="/", status_code=302)
     return templates.TemplateResponse(
         "login.html", {"request": request, "errore": errore}
