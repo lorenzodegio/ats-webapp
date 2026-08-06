@@ -202,7 +202,7 @@ def _esegui_container(nome_servizio: str, db: Session, elaborazione: Elaborazion
 
     processo = subprocess.Popen(
         comando, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, bufsize=1, universal_newlines=True,
+        text=True, encoding="utf-8", errors="replace", bufsize=1, universal_newlines=True,
     )
 
     for riga in processo.stdout:
