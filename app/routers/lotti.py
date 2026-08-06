@@ -23,9 +23,10 @@ from app.fake_pipeline import avvia_preprocessing_fake, avvia_ocr_fake, avvia_di
 from app.real_pipeline import (
     avvia_preprocessing_reale, avvia_ocr_reale, avvia_difformita_reale,
     correggi_barcode_reale, scrivi_excel_finale_reale, esiste_lotto_in_esecuzione,
+    metti_in_pausa_container, riprendi_container, annulla_container,
 )
 from app.config_helper import backend_pipeline_e_reale
-from app.progresso import percentuale_avanzamento, etichetta_stato, ETICHETTE_STATO
+from app.progresso import percentuale_avanzamento, etichetta_stato, ETICHETTE_STATO, estrai_progresso_da_log
 
 router = APIRouter(tags=["lotti"])
 templates = Jinja2Templates(directory="app/templates")
@@ -83,23 +84,24 @@ def crea_lotto(
             status_code=302,
         )
 
-    lotto_esistente = db.query(LottoMensile).filter(LottoMensile.mese == mese, LottoMensile.anno == anno).first()
-    if lotto_esistente:
-        return RedirectResponse(
-            url=f"/lotti/nuovo?errore=Esiste+gia%27+un+lotto+per+{MESI_IT[mese]}+{anno}", status_code=302
-        )
-
-    cartella = _nome_cartella(mese, anno)
     lotto = LottoMensile(
         mese=mese, anno=anno, nome=nome,
         stato=StatoLotto.caricamento,
         operatore_id=utente.id,
-        sp_lavoro_path=f"LAVORO/MESE DI LAVORAZIONE/{cartella}",
-        sp_prescrizioni_path=f"LAVORO/MESE DI LAVORAZIONE/{cartella}/PRESCRIZIONI",
-        sp_output_path="LAVORO/OUTPUT",
-        sp_archivio_path=f"ARCHIVIO/ELABORAZIONI RECENTI/{cartella}",
     )
     db.add(lotto)
+    db.commit()
+    db.refresh(lotto)
+
+    # Cartella univoca per lotto: mese/anno da soli non bastano piu' a
+    # distinguere elaborazioni diverse dello stesso periodo. Il timestamp
+    # di creazione + le prime 8 cifre dell'UUID garantiscono unicita' anche
+    # in caso di doppio invio nello stesso secondo.
+    cartella = f"{_nome_cartella(mese, anno)}_{lotto.created_at:%Y%m%d%H%M%S}_{str(lotto.id)[:8]}"
+    lotto.sp_lavoro_path = f"LAVORO/MESE DI LAVORAZIONE/{cartella}"
+    lotto.sp_prescrizioni_path = f"LAVORO/MESE DI LAVORAZIONE/{cartella}/PRESCRIZIONI"
+    lotto.sp_output_path = "LAVORO/OUTPUT"
+    lotto.sp_archivio_path = f"ARCHIVIO/ELABORAZIONI RECENTI/{cartella}"
     db.commit()
     db.refresh(lotto)
 
@@ -191,8 +193,10 @@ def dettaglio_lotto(
 
     elaborazione_attiva = lotto.elaborazione_attiva
     log_recenti = []
+    progresso_item = None
     if elaborazione_attiva:
         log_recenti = sorted(elaborazione_attiva.log, key=lambda l: l.timestamp)[-20:]
+        progresso_item = estrai_progresso_da_log(elaborazione_attiva.log)
 
     return templates.TemplateResponse(
         "lotto_detail.html",
@@ -206,6 +210,8 @@ def dettaglio_lotto(
             "difformita_da_gestire": difformita_da_gestire,
             "elaborazione_attiva": elaborazione_attiva,
             "log_recenti": log_recenti,
+            "progresso_item": progresso_item,
+            "in_pausa": elaborazione_attiva.richiesta_controllo == "pausa" if elaborazione_attiva else False,
         },
     )
 
@@ -328,6 +334,55 @@ def archivia_lotto(
 
 
 # ============================================================
+# Controllo dell'elaborazione in corso (pausa / riprendi / annulla)
+# ============================================================
+
+@router.post("/lotti/{lotto_id}/elaborazione/pausa")
+def metti_in_pausa(
+    lotto_id: str, db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
+):
+    lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
+    elaborazione = lotto.elaborazione_attiva if lotto else None
+    if elaborazione and elaborazione.stato == StatoElaborazione.in_corso:
+        elaborazione.richiesta_controllo = "pausa"
+        db.commit()
+        if backend_pipeline_e_reale(db) and elaborazione.nome_container:
+            metti_in_pausa_container(elaborazione.nome_container)
+    return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+
+
+@router.post("/lotti/{lotto_id}/elaborazione/riprendi")
+def riprendi(
+    lotto_id: str, db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
+):
+    lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
+    elaborazione = lotto.elaborazione_attiva if lotto else None
+    if elaborazione and elaborazione.richiesta_controllo == "pausa":
+        if backend_pipeline_e_reale(db) and elaborazione.nome_container:
+            riprendi_container(elaborazione.nome_container)
+        elaborazione.richiesta_controllo = None
+        db.commit()
+    return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+
+
+@router.post("/lotti/{lotto_id}/elaborazione/annulla")
+def annulla(
+    lotto_id: str, db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
+):
+    lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
+    elaborazione = lotto.elaborazione_attiva if lotto else None
+    if elaborazione and elaborazione.stato == StatoElaborazione.in_corso:
+        elaborazione.richiesta_controllo = "annulla"
+        db.commit()
+        if backend_pipeline_e_reale(db) and elaborazione.nome_container:
+            # Se era in pausa, un container congelato non riceve il kill finche'
+            # non viene ripreso: lo riprendo un istante prima di ucciderlo.
+            riprendi_container(elaborazione.nome_container)
+            annulla_container(elaborazione.nome_container)
+    return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+
+
+# ============================================================
 # Polling JSON
 # ============================================================
 
@@ -339,11 +394,14 @@ def stato_lotto(lotto_id: str, db: Session = Depends(get_db), utente: Utente = D
 
     elaborazione_attiva = lotto.elaborazione_attiva
     log_tail = []
+    progresso_item = None
     if elaborazione_attiva:
+        log_ordinato = sorted(elaborazione_attiva.log, key=lambda l: l.timestamp)
         log_tail = [
             {"livello": l.livello.value, "messaggio": l.messaggio, "timestamp": l.timestamp.strftime("%H:%M:%S")}
-            for l in sorted(elaborazione_attiva.log, key=lambda l: l.timestamp)[-10:]
+            for l in log_ordinato[-10:]
         ]
+        progresso_item = estrai_progresso_da_log(log_ordinato)
 
     return {
         "id": str(lotto.id),
@@ -352,6 +410,8 @@ def stato_lotto(lotto_id: str, db: Session = Depends(get_db), utente: Utente = D
         "etichetta_stato": etichetta_stato(lotto.stato),
         "percentuale": percentuale_avanzamento(lotto.stato),
         "fase_attiva": elaborazione_attiva.fase.value if elaborazione_attiva else None,
+        "richiesta_controllo": elaborazione_attiva.richiesta_controllo if elaborazione_attiva else None,
+        "progresso_item": progresso_item,
         "log_recenti": log_tail,
         "n_prescrizioni_totali": lotto.n_prescrizioni_totali,
         "n_barcode_undefined": lotto.n_barcode_undefined,

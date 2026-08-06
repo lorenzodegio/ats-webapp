@@ -24,10 +24,32 @@
 
 {% if elaborazione_attiva %}
 <div class="card" data-lotto-id="{{ lotto.id }}" id="pannello-avanzamento-dettaglio">
-  <h2 class="card__titolo">Elaborazione in corso &middot; {{ elaborazione_attiva.fase.value }}</h2>
-  <div class="job-attivo-riga__fase" id="etichetta-fase-dettaglio" style="margin-bottom:8px;">{{ etichetta_stato_corrente }}</div>
-  <div class="barra-progresso">
-    <div class="barra-progresso__riempimento" id="barra-progresso-dettaglio" style="width: {{ percentuale }}%;"></div>
+  <div class="pannello-avanzamento__testa">
+    <h2 class="card__titolo" style="margin-bottom:0;">Elaborazione in corso &middot; {{ elaborazione_attiva.fase.value }}</h2>
+    <div class="controlli-elaborazione" id="controlli-elaborazione">
+      <form method="post" action="/lotti/{{ lotto.id }}/elaborazione/pausa" id="form-pausa" style="display:{{ 'none' if in_pausa else 'inline' }};">
+        <button type="submit" class="btn btn--secondario">Metti in pausa</button>
+      </form>
+      <form method="post" action="/lotti/{{ lotto.id }}/elaborazione/riprendi" id="form-riprendi" style="display:{{ 'inline' if in_pausa else 'none' }};">
+        <button type="submit" class="btn btn--primario">Riprendi</button>
+      </form>
+      <form method="post" action="/lotti/{{ lotto.id }}/elaborazione/annulla" onsubmit="return confirm('Annullare questa elaborazione? Il lotto restera\' fermo allo stato attuale e andra\' segnalato come eccezione.');">
+        <button type="submit" class="btn btn--pericolo">Annulla</button>
+      </form>
+    </div>
+  </div>
+  <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+    <div class="job-attivo-riga__fase" id="etichetta-fase-dettaglio">{{ etichetta_stato_corrente }}</div>
+    <span class="badge badge--attesa" id="badge-pausa" style="display:{{ 'inline-flex' if in_pausa else 'none' }};">In pausa</span>
+  </div>
+  <div class="barra-progresso-riga">
+    <div class="barra-progresso">
+      <div class="barra-progresso__riempimento" id="barra-progresso-dettaglio" style="width: {{ percentuale }}%;"></div>
+    </div>
+    <span class="barra-progresso__percentuale" id="percentuale-dettaglio">{{ percentuale }}%</span>
+  </div>
+  <div class="progresso-item" id="progresso-item-dettaglio">
+    {% if progresso_item %}{{ progresso_item.attuale }} di {{ progresso_item.totale }} prescrizioni{% endif %}
   </div>
   <div class="console-log" id="console-log">
     {% for riga in log_recenti %}

@@ -288,6 +288,8 @@ table.tabella tr:last-child td { border-bottom: none; }
 .campo input[type="text"],
 .campo input[type="password"],
 .campo input[type="search"],
+.campo input[type="number"],
+.campo input[type="date"],
 .campo select {
   width: 100%;
   padding: 10px 12px;
@@ -562,6 +564,45 @@ table.tabella tr:last-child td { border-bottom: none; }
 .campo--filtro input, .campo--filtro select {
   padding: 8px 10px;
   font-size: 13px;
+}
+
+.pannello-avanzamento__testa {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.controlli-elaborazione {
+  display: flex;
+  gap: 8px;
+}
+.controlli-elaborazione form { margin: 0; }
+
+.barra-progresso-riga {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.barra-progresso-riga .barra-progresso { flex: 1; }
+
+.barra-progresso__percentuale {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--forest);
+  min-width: 38px;
+  text-align: right;
+}
+
+.progresso-item {
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  min-height: 16px;
 }
 
 /* ---------- Console log elaborazione ---------- */

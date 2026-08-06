@@ -56,6 +56,42 @@ def _log(db: Session, elaborazione: Elaborazione, messaggio: str, livello: Livel
     db.commit()
 
 
+class ElaborazioneAnnullata(Exception):
+    """Sollevata quando l'operatore annulla un'elaborazione finta in corso."""
+
+
+def _controlla_pausa_e_annullamento(db: Session, elaborazione: Elaborazione) -> None:
+    """
+    Da chiamare ad ogni iterazione dei cicli delle 3 fasi finte: legge
+    (con una query leggera, non fidandosi della copia in memoria) la
+    richiesta di controllo piu' recente. Se e' "pausa", resta in attesa
+    qui dentro finche' non viene rimossa o sostituita da "annulla". Se
+    e' "annulla", solleva ElaborazioneAnnullata per interrompere il ciclo.
+    """
+    while True:
+        valore = db.query(Elaborazione.richiesta_controllo).filter(Elaborazione.id == elaborazione.id).scalar()
+        if valore == "annulla":
+            raise ElaborazioneAnnullata()
+        if valore != "pausa":
+            return
+        time.sleep(0.5)
+
+
+def _gestisci_annullamento(db: Session, lotto_id, elaborazione: Elaborazione) -> None:
+    """Marca elaborazione e lotto come annullati dall'operatore (non un errore vero)."""
+    messaggio = "Elaborazione annullata dall'operatore"
+    _log(db, elaborazione, messaggio, LivelloLog.warning)
+    elaborazione.stato = StatoElaborazione.annullata
+    elaborazione.richiesta_controllo = None
+    elaborazione.finished_at = datetime.utcnow()
+    lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
+    if lotto:
+        lotto.stato = StatoLotto.eccezione
+        lotto.note = ((lotto.note or "") + f"\n[{datetime.utcnow():%d/%m %H:%M}] {messaggio}").strip()
+        lotto.updated_at = datetime.utcnow()
+    db.commit()
+
+
 def _forse_eccezione(db: Session, lotto: LottoMensile, elaborazione: Elaborazione, fase_label: str) -> bool:
     """Ritorna True se ha simulato un'eccezione (e ha gia' salvato tutto)."""
     if random.random() >= PROBABILITA_ECCEZIONE_FINTA:
@@ -103,6 +139,7 @@ def avvia_preprocessing_fake(lotto_id) -> None:
         numero_prescrizioni = random.randint(6, 24)
         n_letti = 0
         for i in range(numero_prescrizioni):
+            _controlla_pausa_e_annullamento(db, elaborazione)
             barcode_letto = random.random() > 0.12  # ~88% barcode leggibili
             barcode = genera_barcode() if barcode_letto else None
             presc = Prescrizione(
@@ -116,6 +153,9 @@ def avvia_preprocessing_fake(lotto_id) -> None:
             _scrivi_file_finto(presc.sp_pdf_path, f"PDF finto prescrizione {barcode or 'undefined'}")
             if barcode_letto:
                 n_letti += 1
+            elaborazione.n_processati = i + 1
+            _log(db, elaborazione, f"[{i + 1}/{numero_prescrizioni}] {barcode or 'undefined'}.pdf")
+            time.sleep(0.1)
         db.commit()
 
         lotto.n_pdf_caricati = 1
@@ -134,6 +174,8 @@ def avvia_preprocessing_fake(lotto_id) -> None:
         _log(db, elaborazione, f"Preprocessing completato: {numero_prescrizioni} prescrizioni, {n_letti} barcode letti, {numero_prescrizioni - n_letti} da rivedere")
         db.commit()
 
+    except ElaborazioneAnnullata:
+        _gestisci_annullamento(db, lotto_id, elaborazione)
     except Exception as exc:  # pragma: no cover - solo per il mock
         lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
         if lotto:
@@ -166,9 +208,11 @@ def avvia_ocr_fake(lotto_id) -> None:
         time.sleep(1)
 
         prescrizioni = db.query(Prescrizione).filter(Prescrizione.lotto_id == lotto.id).all()
+        totale = len(prescrizioni)
         n_match = 0
         somma_score = 0.0
-        for presc in prescrizioni:
+        for indice, presc in enumerate(prescrizioni, start=1):
+            _controlla_pausa_e_annullamento(db, elaborazione)
             time.sleep(0.15)
             if _forse_eccezione(db, lotto, elaborazione, "elaborazione OCR"):
                 return
@@ -195,6 +239,9 @@ def avvia_ocr_fake(lotto_id) -> None:
             if presc.sp_json_path:
                 _scrivi_file_finto(presc.sp_json_path, json.dumps(dati_ocr.json_vllm_raw, ensure_ascii=False, indent=2))
 
+            elaborazione.n_processati = indice
+            _log(db, elaborazione, f"[{indice}/{totale}] {presc.barcode}.pdf")
+
         db.commit()
 
         lotto.n_match_excel = n_match
@@ -210,6 +257,8 @@ def avvia_ocr_fake(lotto_id) -> None:
         _log(db, elaborazione, f"OCR completato su {len(prescrizioni)} prescrizioni, score medio {lotto.score_ocr_medio}")
         db.commit()
 
+    except ElaborazioneAnnullata:
+        _gestisci_annullamento(db, lotto_id, elaborazione)
     except Exception as exc:  # pragma: no cover
         lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
         if lotto:
@@ -245,9 +294,12 @@ def avvia_difformita_fake(lotto_id) -> None:
             return
 
         prescrizioni = db.query(Prescrizione).filter(Prescrizione.lotto_id == lotto.id).all()
+        totale = len(prescrizioni)
         n_con_difformita = 0
         n_difformita_totali = 0
-        for presc in prescrizioni:
+        for indice, presc in enumerate(prescrizioni, start=1):
+            _controlla_pausa_e_annullamento(db, elaborazione)
+            time.sleep(0.1)
             if random.random() < 0.25:
                 n_di_questa = random.randint(1, 2)
                 for _ in range(n_di_questa):
@@ -258,6 +310,8 @@ def avvia_difformita_fake(lotto_id) -> None:
                     ))
                 n_con_difformita += 1
                 n_difformita_totali += n_di_questa
+            elaborazione.n_processati = indice
+            _log(db, elaborazione, f"[{indice}/{totale}] {presc.barcode}.pdf controllato")
         db.commit()
 
         lotto.n_difformita_totali = n_difformita_totali
@@ -273,6 +327,8 @@ def avvia_difformita_fake(lotto_id) -> None:
         _log(db, elaborazione, f"Analisi completata: {n_difformita_totali} difformita su {n_con_difformita} prescrizioni")
         db.commit()
 
+    except ElaborazioneAnnullata:
+        _gestisci_annullamento(db, lotto_id, elaborazione)
     except Exception as exc:  # pragma: no cover
         lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
         if lotto:

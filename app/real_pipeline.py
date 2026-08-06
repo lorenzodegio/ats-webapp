@@ -99,6 +99,60 @@ class LottoGiaInEsecuzione(Exception):
     pass
 
 
+class ElaborazioneAnnullata(Exception):
+    """Sollevata quando l'operatore annulla un'elaborazione reale in corso."""
+
+
+def _gestisci_annullamento(db: Session, lotto_id, elaborazione: Elaborazione) -> None:
+    """Marca elaborazione e lotto come annullati dall'operatore (non un errore vero)."""
+    messaggio = "Elaborazione annullata dall'operatore"
+    _log(db, elaborazione, messaggio, LivelloLog.warning)
+    elaborazione.stato = StatoElaborazione.annullata
+    elaborazione.richiesta_controllo = None
+    elaborazione.finished_at = datetime.utcnow()
+    lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
+    if lotto:
+        lotto.stato = StatoLotto.eccezione
+        lotto.note = ((lotto.note or "") + f"\n[{datetime.utcnow():%d/%m %H:%M}] {messaggio}").strip()
+        lotto.updated_at = datetime.utcnow()
+    db.commit()
+
+
+def metti_in_pausa_container(nome_container: str) -> bool:
+    """
+    Comando diretto (docker pause), chiamato dalla route non appena
+    l'operatore clicca "Metti in pausa" — non c'e' bisogno che il ciclo
+    di lettura dell'output se ne accorga: il container si congela a
+    livello di sistema operativo (cgroup freeze), la lettura dello
+    stdout in real_pipeline.py restera' semplicemente in attesa di
+    nuove righe finche' non viene ripreso.
+    """
+    try:
+        subprocess.run(["docker", "pause", nome_container], capture_output=True, text=True, timeout=10)
+        return True
+    except Exception as exc:
+        log.warning(f"Impossibile mettere in pausa il container {nome_container}: {exc}")
+        return False
+
+
+def riprendi_container(nome_container: str) -> bool:
+    try:
+        subprocess.run(["docker", "unpause", nome_container], capture_output=True, text=True, timeout=10)
+        return True
+    except Exception as exc:
+        log.warning(f"Impossibile riprendere il container {nome_container}: {exc}")
+        return False
+
+
+def annulla_container(nome_container: str) -> bool:
+    try:
+        subprocess.run(["docker", "kill", nome_container], capture_output=True, text=True, timeout=10)
+        return True
+    except Exception as exc:
+        log.warning(f"Impossibile terminare il container {nome_container}: {exc}")
+        return False
+
+
 def esiste_lotto_in_esecuzione(db: Session) -> bool:
     stati_docker_attivi = (StatoLotto.preprocessing, StatoLotto.elaborazione_ocr, StatoLotto.analisi_difformita)
     return db.query(LottoMensile).filter(LottoMensile.stato.in_(stati_docker_attivi)).first() is not None
@@ -118,25 +172,56 @@ def _log(db: Session, elaborazione: Elaborazione, messaggio: str, livello: Livel
     getattr(log, livello.value if livello != LivelloLog.warning else "warning")(messaggio)
 
 
-def _esegui_container(nome_servizio: str) -> None:
+def _esegui_container(nome_servizio: str, db: Session, elaborazione: Elaborazione) -> None:
     """
-    Esegue un container Docker Compose e aspetta che finisca. Solleva
-    un'eccezione se il container termina con errore.
+    Esegue un container Docker Compose e ne trasmette l'output riga per
+    riga nel log dell'elaborazione MAN MANO che viene prodotto (non alla
+    fine): pipeline.py logga gia' da solo il progresso in formato
+    "[i/N] nome_file.pdf" durante l'estrazione OCR — usiamo lo stesso
+    formato anche nel backend finto (fake_pipeline.py) cosi' l'interfaccia
+    puo' mostrare "X di Y" a prescindere da quale backend sia attivo.
+
+    Il container riceve un nome univoco (--name) e viene salvato su
+    elaborazione.nome_container: e' quello che le route di pausa/ripresa/
+    annullamento useranno per agire direttamente sul container con
+    "docker pause/unpause/kill", senza dover coordinarsi con questo
+    ciclo di lettura (che semplicemente si blocca in attesa di nuove
+    righe mentre il container e' in pausa, e termina quando viene ucciso).
 
     Presuppone: rete Docker esterna "ats-pipeline_default" gia' creata,
     container "ats-ollama" gia' in esecuzione su quella rete (vedi
     docker-compose.ollama.yml), e comando "docker" disponibile nel PATH
     di chi esegue l'app web (Docker Desktop + WSL2 integration attiva).
     """
-    comando = ["docker", "compose", "run", "--rm", nome_servizio]
-    log.info(f"Eseguo: {' '.join(comando)}")
-    risultato = subprocess.run(comando, capture_output=True, text=True)
+    nome_container = f"ats-{nome_servizio}-{str(elaborazione.id)[:8]}"
+    elaborazione.nome_container = nome_container
+    db.commit()
 
-    if risultato.returncode != 0:
-        raise RuntimeError(
-            f"Container '{nome_servizio}' terminato con errore "
-            f"(codice {risultato.returncode}): {risultato.stderr[-800:]}"
-        )
+    comando = ["docker", "compose", "run", "--name", nome_container, "--rm", nome_servizio]
+    log.info(f"Eseguo: {' '.join(comando)}")
+
+    processo = subprocess.Popen(
+        comando, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1, universal_newlines=True,
+    )
+
+    for riga in processo.stdout:
+        riga = riga.rstrip()
+        if not riga:
+            continue
+        livello = LivelloLog.info
+        if "[ERROR]" in riga or "ERRORE" in riga.upper():
+            livello = LivelloLog.error
+        elif "[WARNING]" in riga or "ATTENZIONE" in riga.upper():
+            livello = LivelloLog.warning
+        _log(db, elaborazione, riga, livello)
+
+    codice_uscita = processo.wait()
+    if codice_uscita != 0:
+        db.refresh(elaborazione)
+        if elaborazione.richiesta_controllo == "annulla":
+            raise ElaborazioneAnnullata()
+        raise RuntimeError(f"Container '{nome_servizio}' terminato con errore (codice {codice_uscita})")
 
 
 def _parse_data_italiana(valore):
@@ -223,7 +308,7 @@ def avvia_preprocessing_reale(lotto_id) -> None:
         _copia_lotto_verso_dati(lotto)
 
         _log(db, elaborazione, "Avvio container fase1-preprocessing")
-        _esegui_container("fase1-preprocessing")
+        _esegui_container("fase1-preprocessing", db, elaborazione)
 
         # Nessun manifest JSON scritto dal container: ricostruisco
         # l'elenco dalle cartelle di output, come fa run_fase.py stesso.
@@ -262,6 +347,8 @@ def avvia_preprocessing_reale(lotto_id) -> None:
         _log(db, elaborazione, f"Preprocessing completato: {n_letti} barcode letti, {n_undefined} da rivedere")
         db.commit()
 
+    except ElaborazioneAnnullata:
+        _gestisci_annullamento(db, lotto_id, elaborazione)
     except Exception as exc:
         log.exception("Errore in avvia_preprocessing_reale")
         lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
@@ -319,7 +406,7 @@ def avvia_ocr_reale(lotto_id) -> None:
         db.commit()
 
         _log(db, elaborazione, "Avvio container fase2-ocr (estrazione VLLM + arricchimento Regione)")
-        _esegui_container("fase2-ocr")
+        _esegui_container("fase2-ocr", db, elaborazione)
 
         n_processati, n_match = 0, 0
         for json_path in OUTPUT_DIR.glob("*.json"):
@@ -368,6 +455,8 @@ def avvia_ocr_reale(lotto_id) -> None:
         _log(db, elaborazione, f"OCR completato: {n_processati} prescrizioni elaborate, {n_match} con match Regione")
         db.commit()
 
+    except ElaborazioneAnnullata:
+        _gestisci_annullamento(db, lotto_id, elaborazione)
     except Exception as exc:
         log.exception("Errore in avvia_ocr_reale")
         lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
@@ -397,7 +486,7 @@ def avvia_difformita_reale(lotto_id) -> None:
         db.commit()
 
         _log(db, elaborazione, "Avvio container fase3-difformita")
-        _esegui_container("fase3-difformita")
+        _esegui_container("fase3-difformita", db, elaborazione)
 
         n_con_difformita, n_difformita_totali = 0, 0
         for json_path in OUTPUT_DIR.glob("*.json"):
@@ -442,6 +531,8 @@ def avvia_difformita_reale(lotto_id) -> None:
         _log(db, elaborazione, f"Analisi completata: {n_difformita_totali} difformita su {n_con_difformita} prescrizioni")
         db.commit()
 
+    except ElaborazioneAnnullata:
+        _gestisci_annullamento(db, lotto_id, elaborazione)
     except Exception as exc:
         log.exception("Errore in avvia_difformita_reale")
         lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
@@ -477,7 +568,7 @@ def scrivi_excel_finale_reale(lotto_id) -> bool:
         db.commit()
 
         _log(db, elaborazione, "Avvio container fase4-excel")
-        _esegui_container("fase4-excel")
+        _esegui_container("fase4-excel", db, elaborazione)
 
         file_excel_finale = next(OUTPUT_DIR.glob("*.xlsx"), None)
         if file_excel_finale is None:
@@ -497,6 +588,9 @@ def scrivi_excel_finale_reale(lotto_id) -> bool:
         _log(db, elaborazione, f"Excel finale scritto: {destinazione}")
         return True
 
+    except ElaborazioneAnnullata:
+        _gestisci_annullamento(db, lotto_id, elaborazione)
+        return False
     except Exception as exc:
         log.exception("Errore in scrivi_excel_finale_reale")
         lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()

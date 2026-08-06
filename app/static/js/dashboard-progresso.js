@@ -22,6 +22,16 @@
           riga.querySelector(".job-attivo-riga__fase").textContent = etichettaFase;
           riga.querySelector(".barra-progresso__riempimento").style.width = `${dati.percentuale}%`;
 
+          const percentualeEl = document.getElementById(`percentuale-${dati.id}`);
+          if (percentualeEl) percentualeEl.textContent = `${dati.percentuale}%`;
+
+          const progressoItemEl = document.getElementById(`progresso-item-${dati.id}`);
+          if (progressoItemEl) {
+            progressoItemEl.textContent = dati.progresso_item
+              ? `${dati.progresso_item.attuale} di ${dati.progresso_item.totale} prescrizioni`
+              : "";
+          }
+
           if (["completato", "archiviato", "eccezione"].includes(dati.stato)) {
             qualcunoConcluso = true;
           }

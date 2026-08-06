@@ -17,7 +17,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     Column, String, Integer, BigInteger, Boolean, DateTime, Date,
-    Numeric, Text, JSON, Enum, ForeignKey, UniqueConstraint
+    Numeric, Text, JSON, Enum, ForeignKey
 )
 from sqlalchemy.orm import relationship
 
@@ -143,8 +143,6 @@ class LottoMensile(Base):
     archiviato_at = Column(DateTime, nullable=True)
     note = Column(Text, nullable=True)
 
-    __table_args__ = (UniqueConstraint("mese", "anno", name="uq_lotto_mese_anno"),)
-
     caricamenti = relationship("CaricamentoFile", back_populates="lotto", cascade="all, delete-orphan")
     elaborazioni = relationship("Elaborazione", back_populates="lotto", cascade="all, delete-orphan")
     prescrizioni = relationship("Prescrizione", back_populates="lotto", cascade="all, delete-orphan")
@@ -228,6 +226,8 @@ class Elaborazione(Base):
     avviata_da = relationship("Utente")
 
     comando_docker = Column(String(1000), nullable=True)
+    nome_container = Column(String(150), nullable=True)  # solo backend reale: nome assegnato al container in esecuzione
+    richiesta_controllo = Column(String(20), nullable=True)  # None | "pausa" | "annulla"
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
     n_processati = Column(Integer, default=0)

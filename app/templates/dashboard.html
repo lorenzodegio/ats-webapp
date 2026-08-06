@@ -16,11 +16,15 @@
     <div class="job-attivo-riga" data-lotto-id="{{ voce.lotto.id }}">
       <div class="job-attivo-riga__testa">
         <a href="/lotti/{{ voce.lotto.id }}" class="job-attivo-riga__nome">{{ voce.lotto.nome }}</a>
-        <span class="job-attivo-riga__fase">{{ voce.etichetta_stato }}{% if voce.elaborazione_attiva %} &middot; {{ voce.elaborazione_attiva.fase.value }}{% endif %}</span>
+        <span class="job-attivo-riga__fase" id="fase-{{ voce.lotto.id }}">{{ voce.etichetta_stato }}{% if voce.elaborazione_attiva %} &middot; {{ voce.elaborazione_attiva.fase.value }}{% endif %}</span>
       </div>
-      <div class="barra-progresso">
-        <div class="barra-progresso__riempimento" style="width: {{ voce.percentuale }}%;"></div>
+      <div class="barra-progresso-riga">
+        <div class="barra-progresso">
+          <div class="barra-progresso__riempimento" id="barra-{{ voce.lotto.id }}" style="width: {{ voce.percentuale }}%;"></div>
+        </div>
+        <span class="barra-progresso__percentuale" id="percentuale-{{ voce.lotto.id }}">{{ voce.percentuale }}%</span>
       </div>
+      <div class="progresso-item" id="progresso-item-{{ voce.lotto.id }}"></div>
     </div>
     {% endfor %}
   {% else %}

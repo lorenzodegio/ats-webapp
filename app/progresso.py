@@ -3,7 +3,28 @@ Helper condiviso per rappresentare l'avanzamento di un Lotto Mensile
 attraverso il suo ciclo di vita (Sezione "Flusso caricamento -> elaborazione
 -> archiviazione" dello schema). Usato da dashboard e dettaglio lotto.
 """
+import re
+
 from app.models import StatoLotto
+
+_PATTERN_PROGRESSO = re.compile(r"\[(\d+)/(\d+)\]")
+
+
+def estrai_progresso_da_log(log_lines) -> dict:
+    """
+    Cerca nell'ultima riga di log (piu' recente prima) un pattern
+    "[i/N]" (formato gia' prodotto sia da pipeline.py nel backend reale,
+    sia da fake_pipeline.py nel backend finto — stesso formato per i due
+    backend, cosi' il frontend non deve saperne la differenza).
+    Ritorna {"attuale": i, "totale": N} oppure None se non trovato.
+    """
+    for riga in reversed(log_lines):
+        messaggio = riga.messaggio if hasattr(riga, "messaggio") else riga.get("messaggio", "")
+        m = _PATTERN_PROGRESSO.search(messaggio)
+        if m:
+            return {"attuale": int(m.group(1)), "totale": int(m.group(2))}
+    return None
+
 
 ORDINE_STATI = [
     StatoLotto.bozza,

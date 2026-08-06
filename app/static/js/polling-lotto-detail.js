@@ -9,7 +9,12 @@
 
   const lottoId = pannello.dataset.lottoId;
   const barra = document.getElementById("barra-progresso-dettaglio");
+  const percentualeEl = document.getElementById("percentuale-dettaglio");
   const etichetta = document.getElementById("etichetta-fase-dettaglio");
+  const badgePausa = document.getElementById("badge-pausa");
+  const formPausa = document.getElementById("form-pausa");
+  const formRiprendi = document.getElementById("form-riprendi");
+  const progressoItemEl = document.getElementById("progresso-item-dettaglio");
   const console_ = document.getElementById("console-log");
 
   async function aggiorna() {
@@ -19,7 +24,17 @@
       const dati = await risposta.json();
 
       barra.style.width = `${dati.percentuale}%`;
+      percentualeEl.textContent = `${dati.percentuale}%`;
       etichetta.textContent = dati.etichetta_stato;
+
+      const inPausa = dati.richiesta_controllo === "pausa";
+      badgePausa.style.display = inPausa ? "inline-flex" : "none";
+      formPausa.style.display = inPausa ? "none" : "inline";
+      formRiprendi.style.display = inPausa ? "inline" : "none";
+
+      progressoItemEl.textContent = dati.progresso_item
+        ? `${dati.progresso_item.attuale} di ${dati.progresso_item.totale} prescrizioni`
+        : "";
 
       console_.innerHTML = dati.log_recenti
         .map((r) => `<div class="console-log__riga console-log__riga--${r.livello}">${r.timestamp} &middot; ${r.messaggio}</div>`)
