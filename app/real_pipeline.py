@@ -29,6 +29,7 @@ consegna per l'elenco preciso dei punti da verificare.
 """
 import json
 import logging
+import re
 import shutil
 import subprocess
 from datetime import datetime, date
@@ -58,6 +59,11 @@ OUTPUT_DIR = DATI_DIR / "output"
 FAKE_SP_ROOT = "sharepoint_finto"  # stessa cartella usata da fake_pipeline.py
 
 FILE_JSON_DA_ESCLUDERE = {"riepilogo.json"}
+
+# Barre di progresso stile tqdm (es. "Progress: |████---| 97.8% Complete"):
+# vanno rilevate per aggiornare la stessa riga di log invece di accumularne
+# centinaia quasi identiche (vedi _esegui_container).
+PATTERN_BARRA_PROGRESSO = re.compile(r"Progress:\s*\|.*\|\s*[\d.]+%\s*Complete", re.IGNORECASE)
 
 # Mappa dei campi realmente prodotti da ocr_cannabis.py verso i nomi
 # colonna di DatiOcr. Le chiavi identiche non sono elencate (mappate 1:1).
@@ -202,13 +208,35 @@ def _esegui_container(nome_servizio: str, db: Session, elaborazione: Elaborazion
 
     processo = subprocess.Popen(
         comando, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, bufsize=1, universal_newlines=True,
+        text=True, encoding="utf-8", errors="replace", bufsize=1, universal_newlines=True,
     )
 
+    ultima_riga_progresso = None
     for riga in processo.stdout:
         riga = riga.rstrip()
         if not riga:
             continue
+
+        if PATTERN_BARRA_PROGRESSO.search(riga):
+            # Barra di progresso stile tqdm (usa \r per riscriversi sul
+            # posto in un terminale vero): aggiorno l'ultima riga invece
+            # di accumularne centinaia quasi identiche.
+            if ultima_riga_progresso is not None:
+                ultima_riga_progresso.messaggio = riga
+                ultima_riga_progresso.timestamp = datetime.utcnow()
+                db.commit()
+            else:
+                ultima_riga_progresso = LogElaborazione(
+                    elaborazione_id=elaborazione.id, messaggio=riga, livello=LivelloLog.info
+                )
+                db.add(ultima_riga_progresso)
+                db.commit()
+            continue
+
+        # Una riga "vera" (non barra di progresso) chiude la barra corrente:
+        # se ne arriva un'altra piu' avanti, sara' una barra nuova.
+        ultima_riga_progresso = None
+
         livello = LivelloLog.info
         if "[ERROR]" in riga or "ERRORE" in riga.upper():
             livello = LivelloLog.error

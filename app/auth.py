@@ -30,10 +30,12 @@ def get_utente_opzionale(request: Request, db: Session = Depends(get_db)) -> Opt
     """
     Ritorna l'utente loggato se presente in sessione, altrimenti None. Non reindirizza.
 
-    Se il cookie di sessione contiene un utente_id non piu' valido come UUID
-    (tipico dopo un cambio di schema: vecchie sessioni salvate prima del
-    passaggio a UUID contengono ancora un intero), tratta la sessione come
-    assente e la ripulisce, invece di far fallire la richiesta con un 500.
+    Se il cookie di sessione contiene un utente_id non piu' valido — sia
+    perche' non e' un UUID ben formato (tipico di vecchie sessioni salvate
+    prima del passaggio a UUID), sia perche' e' un UUID valido ma nessun
+    utente lo ha piu' (tipico dopo un reset_db.py, che ricrea gli utenti
+    con UUID diversi) — tratta la sessione come assente e la ripulisce,
+    invece di lasciarla "appesa" o far fallire la richiesta con un 500.
     """
     utente_id = request.session.get("utente_id")
     if not utente_id:
@@ -43,7 +45,11 @@ def get_utente_opzionale(request: Request, db: Session = Depends(get_db)) -> Opt
     except (ValueError, AttributeError, TypeError):
         request.session.clear()
         return None
-    return db.query(Utente).filter(Utente.id == utente_id).first()
+
+    utente = db.query(Utente).filter(Utente.id == utente_id).first()
+    if utente is None:
+        request.session.clear()
+    return utente
 
 
 class RedirectLogin(Exception):
