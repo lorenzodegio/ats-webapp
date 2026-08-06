@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block titolo %}Difformita — ATS Cannabis OCR{% endblock %}
+
+{% block contenuto %}
+<div class="main__header">
+  <div>
+    <h1>Difformita</h1>
+    <div class="sottotitolo">Non conformita regolamentari rilevate in fase 4</div>
+  </div>
+</div>
+
+<div class="card">
+  <form method="get" action="/difformita" class="filtri-riga">
+    <select name="tipo" onchange="this.form.submit()">
+      <option value="">Tutti i tipi</option>
+      {% for t in tipi_disponibili %}
+      <option value="{{ t }}" {% if t == tipo_selezionato %}selected{% endif %}>{{ t }}</option>
+      {% endfor %}
+    </select>
+    {% if tipo_selezionato %}<a href="/difformita" class="btn btn--secondario">Azzera</a>{% endif %}
+  </form>
+
+  {% if difformita_list %}
+  <table class="tabella">
+    <thead>
+      <tr>
+        <th>Tipo</th>
+        <th>Descrizione</th>
+        <th>Gravita</th>
+        <th>Barcode</th>
+        <th>File origine</th>
+        <th>Rilevata il</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in difformita_list %}
+      <tr>
+        <td class="mono">{{ d.tipo }}</td>
+        <td>{{ d.descrizione }}</td>
+        <td>
+          <span class="pallino-gravita pallino-gravita--{{ d.gravita.value }}"></span>{{ d.gravita.value|capitalize }}
+        </td>
+        <td class="mono">{{ d.prescrizione.barcode if d.prescrizione else '—' }}</td>
+        <td>{{ d.prescrizione.job.nome_file_origine if d.prescrizione and d.prescrizione.job else '—' }}</td>
+        <td>{{ d.creato_il.strftime("%d/%m/%Y %H:%M") }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="stato-vuoto">Nessuna difformita trovata{% if tipo_selezionato %} per il tipo "{{ tipo_selezionato }}"{% endif %}.</div>
+  {% endif %}
+</div>
+{% endblock %}
