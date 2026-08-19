@@ -54,11 +54,28 @@ def fase_ocr():
 
     riepilogo = pipeline.esegui_estrazione(
         ricette_dir, output_dir, solo_test=False,
-        gpu=1, model="", excel_path=excel_regione,
+        # gpu=None: NON forzare un valore di num_gpu, lascia decidere a
+        # Ollama in base alla VRAM realmente disponibile. gpu=1 (valore
+        # precedente qui) riproponeva esattamente il bug risolto nella
+        # pipeline CLI: num_gpu=1 in Ollama significa "un solo layer su
+        # GPU", non "usa la GPU" — forzava quasi tutto il modello su CPU.
+        gpu=None, model=None, excel_path=excel_regione,
     )
     print(f"OCR completato: {riepilogo}")
     if riepilogo.get("elaborati", 0) == 0:
         sys.exit(1)
+
+    # Passo 2 della pipeline CLI originale (pipeline.py), mancava del
+    # tutto qui — la fase "difformita" richiede i campi COD_FISCALE/
+    # LORDO_PRESC/CONTROLLO_CODICE_PRESCRIZIONE aggiunti da questo passo
+    # per i controlli 14/17/18. Senza, quei controlli segnalano sempre
+    # difformità per "dati mancanti" anche quando la ricetta è corretta
+    # — verificato: è esattamente quello che succedeva nei test (codici
+    # 14 e 18 comparivano sempre tra le difformità). Non blocca la
+    # pipeline se manca/fallisce (stesso comportamento non fatale della
+    # CLI originale) — solo logga, i controlli 14/17/18 restano
+    # correttamente "dati mancanti" in quel caso, come previsto.
+    pipeline.esegui_merge_regione(excel_regione, output_dir)
 
 
 def fase_difformita():

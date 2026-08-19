@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard — ATS Cannabis OCR</title>
+</head>
+<body>
+    <!--
+        Placeholder minimo, SOLO per sbloccare test_client.py e i test
+        di backend — nessun design. Va sostituito dal template vero del
+        team frontend (Lorenzo/Khalil) quando pronto.
+    -->
+    <nav>
+        <a href="/">Dashboard</a> |
+        <a href="/jobs/nuovo">Nuova elaborazione</a> |
+        <a href="/jobs">Elaborazioni</a> |
+        <a href="/archivio">Archivio</a> |
+        <a href="/difformita">Difformità</a> |
+        <a href="/logout">Logout ({{ utente.username }})</a>
+    </nav>
+    <hr>
+
+    <h1>Dashboard</h1>
+
+    <section>
+        <h2>KPI</h2>
+        <ul>
+            <li>Prescrizioni totali: {{ n_prescrizioni }}</li>
+            <li>Difformità totali: {{ n_difformita }}</li>
+            <li>Job in coda: {{ n_in_coda }}</li>
+        </ul>
+    </section>
+
+    <section>
+        <h2>Difformità per tipo</h2>
+        {% if difformita_per_tipo %}
+        <table border="1" cellpadding="4">
+            <tr><th>Tipo</th><th>Conteggio</th></tr>
+            {% for tipo, conteggio in difformita_per_tipo %}
+            <tr><td>{{ tipo }}</td><td>{{ conteggio }}</td></tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <p>Nessuna difformità registrata.</p>
+        {% endif %}
+    </section>
+
+    <section>
+        <h2>Ultime elaborazioni</h2>
+        {% if ultime_elaborazioni %}
+        <table border="1" cellpadding="4">
+            <tr><th>ID</th><th>File</th><th>Stato</th><th>Creato il</th></tr>
+            {% for job in ultime_elaborazioni %}
+            <tr>
+                <td>{{ job.id }}</td>
+                <td>{{ job.nome_file_origine }}</td>
+                <td>{{ job.stato.value }}</td>
+                <td>{{ job.creato_il }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <p>Nessuna elaborazione ancora effettuata.</p>
+        {% endif %}
+    </section>
+</body>
+</html>

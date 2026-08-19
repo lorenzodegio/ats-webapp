@@ -19,7 +19,14 @@ Requisiti:
     pip install pandas openpyxl ollama
 
 Modello richiesto (solo se si vogliono i check semantici):
-    ollama pull qwen2.5:7b
+    ollama pull qwen3-vl:8b
+
+Nota: il task è puramente testuale (nessuna immagine), quindi qwen3-vl:8b
+viene riusato solo per comodità/consistenza con gli altri moduli — se si
+vuole ottimizzare oltre, un modello Qwen3 di solo testo della stessa
+taglia (senza encoder visivo) sarebbe più leggero per questo compito
+specifico. Override rapido senza toccare il codice:
+    $env:OLLAMA_MODEL_TESTO="qwen3:8b"
 
 Utilizzo:
     from phase5_difformita import run
@@ -43,7 +50,7 @@ logger = logging.getLogger("Phase5")
 
 # ─── Configurazione LLM per check semantici ────────────────────────────────────
 
-OLLAMA_MODEL_TESTO = os.getenv("OLLAMA_MODEL_TESTO", "qwen2.5vl:7b")
+OLLAMA_MODEL_TESTO = os.getenv("OLLAMA_MODEL_TESTO", "qwen3-vl:8b")
 USA_LLM_SEMANTICO   = os.getenv("USA_LLM_SEMANTICO", "true").lower() == "true"
 
 try:
@@ -419,13 +426,10 @@ TESTO: "{testo}"
 Il testo contiene un'indicazione di POSOLOGIA — cioè una QUANTITA' da assumere (es. gocce, mg, cartine, capsule) E una FREQUENZA di somministrazione (es. al giorno, ogni X ore, mattina e sera, "die")? Interpreta il testo con tolleranza verso refusi OCR: se la quantita' o la frequenza sono scritte in un modo insolito o con errori di battitura/lettura ma il senso è chiaramente presente, considera la posologia PRESENTE.
 
 Rispondi SOLO con questo JSON, nessun altro testo:
-{{"posologia_presente": true, "motivazione": "breve spiegazione del ragionamento in una frase"}} oppure {{"posologia_presente": false, "motivazione": "breve spiegazione del ragionamento in una frase"}}"""
+{{"posologia_presente": true}} oppure {{"posologia_presente": false}}"""
 
     risultato = _chiama_llm_testo(prompt)
     presente = risultato.get("posologia_presente", None)
-    motivazione = risultato.get("motivazione", "")
-    if motivazione:
-        logger.info(f"  [10B] ragionamento: {motivazione}")
 
     if presente is None:
         logger.warning("  check_10B: risposta LLM non valida, fallback a True (difformita')")
@@ -740,10 +744,15 @@ def _chiama_llm_testo(prompt: str) -> dict:
     try:
         response = ollama.chat(
             model=OLLAMA_MODEL_TESTO,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": prompt + ("\n\n/no_think" if "qwen3" in OLLAMA_MODEL_TESTO.lower() else "")}],
+            # Qwen3-VL supporta il thinking mode: va disabilitato per non
+            # rallentare i check (girano su ogni riga) e per non rischiare
+            # che testo di ragionamento residuo confonda la regex sotto.
+            think=False,
             options={"temperature": 0.0, "num_ctx": 4096}
         )
         testo = response["message"]["content"].strip()
+        testo = re.sub(r'<think>[\s\S]*?</think>', '', testo, flags=re.IGNORECASE).strip()
         match = re.search(r'\{[\s\S]*\}', testo)
         if match:
             return json.loads(match.group(0))
@@ -789,13 +798,10 @@ Interpreta con tolleranza verso i refusi OCR: se una di queste espressioni
 il senso è chiaramente presente, considera la dicitura PRESENTE.
 
 Rispondi SOLO con questo JSON, nessun altro testo:
-{{"dicitura_presente": true, "motivazione": "breve spiegazione del ragionamento in una frase"}} oppure {{"dicitura_presente": false, "motivazione": "breve spiegazione del ragionamento in una frase"}}"""
+{{"dicitura_presente": true}} oppure {{"dicitura_presente": false}}"""
 
     risultato = _chiama_llm_testo(prompt)
     presente = risultato.get("dicitura_presente", None)
-    motivazione = risultato.get("motivazione", "")
-    if motivazione:
-        logger.info(f"  [05A] ragionamento: {motivazione}")
 
     if presente is None:
         # LLM non ha risposto correttamente, fallback prudente: nessuna difformita'
@@ -847,14 +853,11 @@ oleosa" o "olio MCT" — sono ingredienti/processi generici, non un
 metodo con nome proprio.
 
 Rispondi SOLO con questo JSON:
-{{"produttore_industriale": true|false, "metodo_specifico_presente": true|false, "motivazione": "breve spiegazione del ragionamento in una frase"}}"""
+{{"produttore_industriale": true|false, "metodo_specifico_presente": true|false}}"""
 
     risultato = _chiama_llm_testo(prompt)
     produttore_industriale = risultato.get("produttore_industriale", None)
     metodo_presente = risultato.get("metodo_specifico_presente", None)
-    motivazione = risultato.get("motivazione", "")
-    if motivazione:
-        logger.info(f"  [09B] ragionamento: {motivazione}")
 
     if produttore_industriale is None and metodo_presente is None:
         logger.warning("  check_09B: risposta LLM non valida, fallback a True (difformita')")
@@ -898,13 +901,10 @@ oppure la differenza e' troppo estesa per un errore plausibile,
 rispondi che NON sono la stessa persona.
 
 Rispondi SOLO con questo JSON:
-{{"stessa_persona": true, "motivazione": "breve spiegazione del ragionamento in una frase"}} oppure {{"stessa_persona": false, "motivazione": "breve spiegazione del ragionamento in una frase"}}"""
+{{"stessa_persona": true}} oppure {{"stessa_persona": false}}"""
 
     risultato = _chiama_llm_testo(prompt)
     stessa = risultato.get("stessa_persona", None)
-    motivazione = risultato.get("motivazione", "")
-    if motivazione:
-        logger.info(f"  [19B] ragionamento: {motivazione}")
 
     if stessa is None:
         logger.warning("  check_19B: risposta LLM non valida, fallback a True (difformita')")
@@ -1116,82 +1116,63 @@ def run(input_dir: Path, output_dir: Path):
 def elabora_cartella(cartella: Path):
     """
     Elabora tutti i JSON in una cartella (esclude riepilogo.json) e
-    produce un riepilogo finale con conteggio per codice di difformita'.
-
-    Durante l'esecuzione viene creato un file di log dedicato
-    ("log_ragionamento_fase5.txt", dentro la stessa cartella) che
-    raccoglie TUTTO quello che questa fase logga — incluse le
-    motivazioni/ragionamenti restituiti dai check semantici via Ollama
-    (05A, 09B, 10B, 19B) — pensato per essere scaricabile/ispezionabile
-    a posteriori, separatamente dal log a schermo/GUI.
+    stampa un riepilogo finale con conteggio per codice di difformita',
+    analogo a quello prodotto da run() sull'Excel.
     """
-    percorso_log_ragionamento = cartella / "log_ragionamento_fase5.txt"
-    handler_file = logging.FileHandler(percorso_log_ragionamento, mode="w", encoding="utf-8")
-    handler_file.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%H:%M:%S"))
-    handler_file.setLevel(logging.INFO)
-    logging.getLogger().addHandler(handler_file)
+    json_files = sorted(cartella.glob("*.json"))
+    json_files = [f for f in json_files if f.name not in ("riepilogo.json", "riepilogo_difformita.json")]
 
-    try:
-        json_files = sorted(cartella.glob("*.json"))
-        json_files = [f for f in json_files if f.name not in ("riepilogo.json", "riepilogo_difformita.json")]
+    if not json_files:
+        print(f"Nessun JSON trovato in {cartella}")
+        return
 
-        if not json_files:
-            logger.warning(f"Nessun JSON trovato in {cartella}")
-            return
+    print(f"Elaborazione di {len(json_files)} ricette...\n")
 
-        logger.info(f"Elaborazione di {len(json_files)} ricette...")
+    risultati  = {}
+    contatori  = {}
+    n_difformi = 0
+    n_errori   = 0
 
-        risultati  = {}
-        contatori  = {}
-        n_difformi = 0
-        n_errori   = 0
+    for json_path in json_files:
+        try:
+            dati = json.loads(json_path.read_text(encoding="utf-8-sig"))
+            diffs = analizza_riga(dati)
+            risultati[json_path.name] = diffs
+            salva_difformita_json(json_path, diffs)
+            if diffs:
+                n_difformi += 1
+                for d in diffs:
+                    contatori[d] = contatori.get(d, 0) + 1
+            print(f"  {json_path.name}: {diffs if diffs else 'NESSUNA'}")
+        except Exception as e:
+            n_errori += 1
+            print(f"  {json_path.name}: ERRORE - {e}")
 
-        for json_path in json_files:
-            try:
-                dati = json.loads(json_path.read_text(encoding="utf-8-sig"))
-                logger.info(f"--- {json_path.name} ---")
-                diffs = analizza_riga(dati)
-                risultati[json_path.name] = diffs
-                salva_difformita_json(json_path, diffs)
-                if diffs:
-                    n_difformi += 1
-                    for d in diffs:
-                        contatori[d] = contatori.get(d, 0) + 1
-                logger.info(f"  {json_path.name}: {diffs if diffs else 'NESSUNA'}")
-            except Exception as e:
-                n_errori += 1
-                logger.error(f"  {json_path.name}: ERRORE - {e}")
+    n_tot = len(json_files)
+    print(f"\n{'='*50}")
+    print(f"Totale ricette:     {n_tot}")
+    print(f"Con difformita':    {n_difformi} ({round(n_difformi/n_tot*100,1) if n_tot else 0}%)")
+    print(f"Senza difformita':  {n_tot - n_difformi - n_errori} ({round((n_tot-n_difformi-n_errori)/n_tot*100,1) if n_tot else 0}%)")
+    if n_errori:
+        print(f"Errori:             {n_errori}")
+    print(f"\nPer codice di difformita':")
+    for codice, cnt in sorted(contatori.items()):
+        print(f"  {codice:4s}: {cnt:4d} ({round(cnt/n_tot*100,1) if n_tot else 0}%)")
 
-        n_tot = len(json_files)
-        logger.info("=" * 50)
-        logger.info(f"Totale ricette:     {n_tot}")
-        logger.info(f"Con difformita':    {n_difformi} ({round(n_difformi/n_tot*100,1) if n_tot else 0}%)")
-        logger.info(f"Senza difformita':  {n_tot - n_difformi - n_errori} ({round((n_tot-n_difformi-n_errori)/n_tot*100,1) if n_tot else 0}%)")
-        if n_errori:
-            logger.info(f"Errori:             {n_errori}")
-        logger.info("Per codice di difformita':")
-        for codice, cnt in sorted(contatori.items()):
-            logger.info(f"  {codice:4s}: {cnt:4d} ({round(cnt/n_tot*100,1) if n_tot else 0}%)")
-
-        # Salva anche un riepilogo JSON, utile per analisi successive
-        out_path = cartella / "riepilogo_difformita.json"
-        out_path.write_text(
-            json.dumps({
-                "totale": n_tot,
-                "con_difformita": n_difformi,
-                "senza_difformita": n_tot - n_difformi - n_errori,
-                "errori": n_errori,
-                "per_codice": contatori,
-                "risultati": risultati
-            }, indent=2, ensure_ascii=False),
-            encoding="utf-8"
-        )
-        logger.info(f"Riepilogo salvato in: {out_path}")
-        logger.info(f"Log ragionamento IA salvato in: {percorso_log_ragionamento}")
-
-    finally:
-        logging.getLogger().removeHandler(handler_file)
-        handler_file.close()
+    # Salva anche un riepilogo JSON, utile per analisi successive
+    out_path = cartella / "riepilogo_difformita.json"
+    out_path.write_text(
+        json.dumps({
+            "totale": n_tot,
+            "con_difformita": n_difformi,
+            "senza_difformita": n_tot - n_difformi - n_errori,
+            "errori": n_errori,
+            "per_codice": contatori,
+            "risultati": risultati
+        }, indent=2, ensure_ascii=False),
+        encoding="utf-8"
+    )
+    print(f"\nRiepilogo salvato in: {out_path}")
 
 
 if __name__ == "__main__":

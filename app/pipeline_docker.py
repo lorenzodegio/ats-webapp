@@ -28,7 +28,9 @@ vedi docker/run_fase.py.
 
 import json
 import logging
+import re
 import subprocess
+import time
 from pathlib import Path
 
 from database import SessionLocal
@@ -36,29 +38,85 @@ from models import Job, Prescrizione, Difformita, StatoJob
 
 log = logging.getLogger("PipelineDocker")
 
+# Riconosce le righe di avanzamento nel formato [N/M] già usato in modo
+# consistente in tutto il codice (fasi pipeline: "[1/4] ...", ricette:
+# "  [34/96] file.pdf") — usato per filtrare cosa mostrare in tempo
+# reale durante job lunghi (vedi _esegui_container), senza dover
+# conoscere il formato esatto di ogni singola fase.
+PATTERN_PROGRESSO = re.compile(r"\[\d+/\d+\]")
+
+# Radice del progetto (ats-webapp/), dove sta docker-compose.yml — NON
+# necessariamente la cartella corrente del processo Python: main.py va
+# lanciato da dentro app/ (per i suoi import interni), ma "docker
+# compose run" cerca docker-compose.yml nella cartella da cui viene
+# eseguito. Senza specificare esplicitamente cwd qui, il comando
+# fallirebbe SEMPRE ("no configuration file provided") non appena
+# lanciato da un server avviato correttamente da app/.
+RADICE_PROGETTO = Path(__file__).parent.parent
+
 # Nomi dei file JSON prodotti dalla pipeline che NON sono singole
 # prescrizioni (riepiloghi aggregati) — da escludere quando si legge
 # la cartella di output
 FILE_JSON_DA_ESCLUDERE = {"riepilogo.json", "riepilogo_difformita.json"}
 
 
-def _esegui_container(nome_servizio: str, argomenti: list[str]) -> None:
+def _esegui_container(nome_servizio: str, argomenti: list[str], job_id: int = None) -> None:
     """
-    Esegue UN container Docker Compose e aspetta che finisca. Solleva
-    un'eccezione se il container termina con codice di errore, così il
-    chiamante può marcare il Job come StatoJob.errore invece di
-    proseguire alla fase successiva su dati incompleti.
-    """
-    comando = ["docker", "compose", "run", "--rm", nome_servizio, *argomenti]
-    log.info(f"Eseguo: {' '.join(comando)}")
-    risultato = subprocess.run(comando, capture_output=True, text=True)
+    Esegue UN container Docker Compose e aspetta che finisca, leggendo
+    l'output RIGA PER RIGA man mano che viene prodotto (non tutto in
+    blocco a fine esecuzione) — necessario per vedere l'avanzamento
+    durante job lunghi (ore), non solo un dump finale.
 
-    if risultato.returncode != 0:
+    In console (livello INFO) mostra solo le righe nel formato "[N/M]"
+    già usato in modo consistente per il progresso (fase corrente,
+    numero ricetta) — il resto (dettaglio per campo, per crop, per
+    chiamata Ollama) va a livello DEBUG, quindi non sparisce: resta
+    disponibile abbassando il livello di log, e viene comunque
+    stampato per intero se il container fallisce, per non perdere
+    nulla di utile al debug.
+
+    Solleva un'eccezione se il container termina con codice di errore,
+    così il chiamante può marcare il Job come StatoJob.errore invece
+    di proseguire alla fase successiva su dati incompleti.
+    """
+    prefisso = f"[job {job_id}] " if job_id is not None else ""
+    comando = ["docker", "compose", "run", "--rm", nome_servizio, *argomenti]
+    log.info(f"{prefisso}Avvio fase: {nome_servizio}")
+
+    inizio = time.monotonic()
+    # stderr=STDOUT: unisce i due flussi in ordine cronologico corretto
+    # (docker scrive parte dei messaggi su stderr, la pipeline su
+    # stdout — separarli avrebbe comunque perso l'ordine relativo).
+    # encoding="utf-8" esplicito: senza, su Windows subprocess usa la
+    # codifica di default del sistema (cp1252), diversa da quella con
+    # cui il container scrive davvero il suo output — risultato:
+    # caratteri accentati storpiati nei log (es. "â€”" al posto di "—").
+    processo = subprocess.Popen(
+        comando, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", cwd=RADICE_PROGETTO, bufsize=1,
+    )
+
+    righe_complete = []  # tenute per intero, per il dump completo in caso di errore
+    for riga in processo.stdout:
+        riga = riga.rstrip("\n")
+        righe_complete.append(riga)
+        if PATTERN_PROGRESSO.search(riga):
+            log.info(f"{prefisso}[{nome_servizio}] {riga.strip()}")
+        else:
+            log.debug(f"{prefisso}[{nome_servizio}] {riga}")
+
+    codice_ritorno = processo.wait()
+    durata = time.monotonic() - inizio
+
+    if codice_ritorno != 0:
+        log.error(f"{prefisso}Container '{nome_servizio}' fallito (codice {codice_ritorno}) dopo {durata:.1f}s — output completo:")
+        for riga in righe_complete:
+            log.error(f"{prefisso}[{nome_servizio}] {riga}")
         raise RuntimeError(
-            f"Container '{nome_servizio}' terminato con errore "
-            f"(codice {risultato.returncode}): {risultato.stderr[-500:]}"
+            f"Container '{nome_servizio}' terminato con errore (codice {codice_ritorno}) dopo {durata:.1f}s"
         )
-    log.info(f"Container '{nome_servizio}' completato con successo.")
+
+    log.info(f"{prefisso}Fase completata: {nome_servizio} in {durata:.1f}s.")
 
 
 def popola_prescrizioni_da_output(db, job: Job, cartella_output: Path) -> int:
@@ -191,21 +249,21 @@ def avvia_pipeline_per_job(job_id: int, cartella_output: Path) -> None:
 
         job.stato = StatoJob.fase1_preprocessing
         db.commit()
-        _esegui_container("fase1-preprocessing", [])
+        _esegui_container("fase1-preprocessing", [], job_id=job.id)
 
         job.stato = StatoJob.fase2_ocr
         db.commit()
-        _esegui_container("fase2-ocr", [])
+        _esegui_container("fase2-ocr", [], job_id=job.id)
         popola_prescrizioni_da_output(db, job, cartella_output)
 
         job.stato = StatoJob.fase3_difformita
         db.commit()
-        _esegui_container("fase3-difformita", [])
+        _esegui_container("fase3-difformita", [], job_id=job.id)
         popola_difformita_da_output(db, job, cartella_output)
 
         job.stato = StatoJob.fase4_excel
         db.commit()
-        _esegui_container("fase4-excel", [])
+        _esegui_container("fase4-excel", [], job_id=job.id)
         segna_excel_scritto(db, job)
 
         job.stato = StatoJob.completato

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>Nuova elaborazione — ATS Cannabis OCR</title>
+</head>
+<body>
+    <!-- Placeholder minimo, solo per sbloccare i test di backend. -->
+    <nav>
+        <a href="/">Dashboard</a> |
+        <a href="/jobs/nuovo">Nuova elaborazione</a> |
+        <a href="/jobs">Elaborazioni</a> |
+        <a href="/archivio">Archivio</a> |
+        <a href="/difformita">Difformità</a> |
+        <a href="/logout">Logout ({{ utente.username }})</a>
+    </nav>
+    <hr>
+
+    <h1>Nuova elaborazione</h1>
+
+    <!--
+        enctype="multipart/form-data" obbligatorio: crea_job() in
+        jobs.py si aspetta un UploadFile (File(...)), un form
+        normale (application/x-www-form-urlencoded) non funzionerebbe.
+    -->
+    <form action="/jobs/nuovo" method="post" enctype="multipart/form-data">
+        <p>
+            <label for="file">File PDF ricette (multi-pagina):</label><br>
+            <input type="file" id="file" name="file" accept=".pdf" required>
+        </p>
+        <p>
+            <label for="modalita">Modalità:</label><br>
+            <select id="modalita" name="modalita">
+                <option value="full">Completa (tutte e 4 le fasi)</option>
+            </select>
+        </p>
+        <button type="submit">Avvia elaborazione</button>
+    </form>
+</body>
+</html>

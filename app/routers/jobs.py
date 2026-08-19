@@ -25,8 +25,19 @@ from pipeline_docker import avvia_pipeline_per_job, esiste_job_in_esecuzione
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
 
-CARTELLA_UPLOAD = Path(__file__).parent.parent / "uploads"
-CARTELLA_OUTPUT = Path(__file__).parent.parent / "output"  # cartella condivisa coi container Docker
+# ATTENZIONE percorsi: devono corrispondere ESATTAMENTE a quello che
+# run_fase.py si aspetta dentro i container (vedi il suo docstring) —
+# /dati/ricette_raw come input della fase1, /dati/output come output
+# finale — perché ./dati:/dati è il volume condiviso dichiarato in
+# docker-compose.yml, risolto rispetto alla radice di ats-webapp/ (dove
+# sta docker-compose.yml). jobs.py sta in app/routers/, quindi servono
+# TRE .parent per risalire alla radice (routers -> app -> ats-webapp),
+# non due — con due ci si ferma dentro app/, una cartella diversa da
+# quella che i container vedono davvero (bug mio in un fix precedente,
+# corretto qui).
+CARTELLA_DATI = Path(__file__).parent.parent.parent / "dati"
+CARTELLA_UPLOAD = CARTELLA_DATI / "ricette_raw"
+CARTELLA_OUTPUT = CARTELLA_DATI / "output"
 
 
 @router.get("/jobs/nuovo", response_class=HTMLResponse)

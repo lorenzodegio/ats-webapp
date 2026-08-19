@@ -16,6 +16,15 @@
 # "external" qui sotto) per poterlo raggiungere per nome
 # ("http://ats-ollama:11434"), invece di passare da host.docker.internal.
 #
+# MODELLI: MODELLO_PESANTE/MODELLO_LEGGERO/OLLAMA_MODEL_TESTO impostati
+# esplicitamente qui — le variabili d'ambiente impostate nel terminale
+# host (es. $env:MODELLO_PESANTE) NON si propagano dentro i container,
+# sono processi separati. Senza queste righe, il container userebbe i
+# default scritti nel codice (Qwen3-VL) invece di Qwen2.5-VL, che nei
+# test si è dimostrato più veloce e affidabile sullo stesso hardware.
+# Per cambiare modello, basta modificare i valori qui sotto — non serve
+# toccare il codice Python né ricostruire l'immagine.
+#
 # VOLUMI: tutte e 4 le fasi condividono la stessa cartella ./dati
 # (sul host), che corrisponde a /dati dentro ogni container — così
 # ogni fase trova quello che la fase precedente ha prodotto.
@@ -42,6 +51,9 @@ services:
     command: ["ocr"]
     environment:
       - OLLAMA_HOST=http://ats-ollama:11434
+      - MODELLO_PESANTE=qwen2.5vl:32b
+      - MODELLO_LEGGERO=qwen2.5vl:7b
+      - OLLAMA_MODEL=qwen2.5vl:32b
     volumes:
       - ./dati:/dati
     networks:
@@ -54,6 +66,7 @@ services:
     command: ["difformita"]
     environment:
       - OLLAMA_HOST=http://ats-ollama:11434
+      - OLLAMA_MODEL_TESTO=qwen2.5vl:7b
     volumes:
       - ./dati:/dati
     networks:

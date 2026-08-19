@@ -1,24 +1,43 @@
 """
-OCR Cannabis ATS Insubria — Pipeline Qwen2.5-VL
+OCR Cannabis ATS Insubria — Pipeline Qwen3-VL
 Autori: Alessandro Marchinu, Francesco Milani
-Versione: 3.0
+Versione: 3.1
 
 Pipeline:
 1. PDF -> immagine ad alta risoluzione
-2. Qwen2.5-VL -> estrazione dati in JSON
+2. Qwen3-VL -> estrazione dati in JSON
 3. Sanity check e normalizzazione
 4. Output JSON compatibile con Phase 4 del tutor
 
 Requisiti:
     pip install pymupdf pillow ollama openpyxl pandas
 
-Modello richiesto:
-    ollama pull qwen2.5vl:7b
+Modelli richiesti (serve Ollama >= 0.12.7):
+    ollama pull qwen3-vl:8b
+    ollama pull qwen3-vl:30b
+
+Override rapido dei modelli senza toccare il codice (PowerShell), utile
+per confrontare A/B con la baseline Qwen2.5-VL:
+    $env:MODELLO_PESANTE="qwen2.5vl:32b"; $env:MODELLO_LEGGERO="qwen2.5vl:7b"
 
 Utilizzo:
     python ocr_cannabis.py                    # elabora tutte le ricette in ./ricette/
     python ocr_cannabis.py --input /path/pdf  # cartella personalizzata
     python ocr_cannabis.py --test             # test su prima ricetta trovata
+
+CHANGELOG v3.1:
+    - Migrazione da Qwen2.5-VL a Qwen3-VL: MODELLO_PESANTE ora qwen3-vl:30b
+      (MoE, ~3B parametri attivi per token — molto più veloce su GPU 16GB
+      anche quando non entra tutto in VRAM, perché la CPU calcola solo la
+      parte attiva), MODELLO_LEGGERO ora qwen3-vl:8b (denso, entra intero
+      in VRAM con margine)
+    - think=False esplicito su tutte le chiamate Ollama: Qwen3-VL supporta
+      il thinking mode, che va disabilitato per non rallentare le risposte
+      e non rischiare di rompere il parsing JSON con testo di ragionamento
+    - pulisci_json() ora rimuove anche eventuali blocchi <think> residui
+    - get_date_corrector() ora riusa MODELLO_PESANTE invece di un valore
+      hardcoded separato (erano due stringhe indipendenti che potevano
+      disallinearsi)
 
 CHANGELOG v3.0:
     - Fix data_emissione: ricerca ristretta al solo timbro DATA SPEDIZIONE,
@@ -32,6 +51,7 @@ import fitz
 import base64
 import json
 import re
+import os
 import sys
 import argparse
 import logging
@@ -57,11 +77,50 @@ LOG_DIR     = BASE_DIR / "logs"
 PERCORSO_REGIONE = None
 _cache_barcode_a_farmacia_id = None  # {barcode: "CO0310 - TILI & C."}, caricata una sola volta
 
-OLLAMA_MODEL = "qwen2.5vl:32b"
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3-vl:30b")
 _date_corrector = None
 IMAGE_ZOOM   = 3.0
-NUM_GPU      = 1
+# ATTENZIONE: num_gpu in Ollama NON è un booleano "usa la GPU sì/no" — è il
+# NUMERO DI LAYER del modello da caricare sulla GPU.
+#
+# Storia di questo parametro (per non ripetere gli stessi tentativi):
+#   1. NUM_GPU=1 (default originale) -> caricava un solo layer su GPU,
+#      tutto il resto su CPU. Causa quasi certa delle "decine di minuti
+#      per ricetta" storiche.
+#   2. NUM_GPU=99 (primo tentativo di fix) -> peggio ancora: con un
+#      modello da 20GB su una GPU da 16GB, forzare "quanti più layer
+#      entrano" ha spinto Ollama a tentare un caricamento quasi completo
+#      in VRAM, sforando nella "shared GPU memory" di Windows (RAM di
+#      sistema usata come estensione via PCIe) — verificato con `ollama
+#      ps` che mostrava "100% GPU" (impossibile per davvero con un
+#      modello più grande della VRAM), risultato PEGGIORE del CPU
+#      fallback pulito.
+#   3. None (attuale) -> NON si passa affatto num_gpu nella chiamata,
+#      lasciando che sia Ollama a decidere in autonomia in base alla
+#      VRAM realmente disponibile. È la configurazione con cui abbiamo
+#      ottenuto il test isolato riuscito (31s, ~54 tok/s, split
+#      automatico ~70/30 GPU/CPU).
+#
+# Per un vero override esplicito da riga di comando: --gpu 0 forza CPU-only
+# (utile solo per confronto/debug), qualunque numero positivo forza quel
+# tetto di layer (sconsigliato per modelli più grandi della VRAM, vedi sopra).
+NUM_GPU      = None
 NUM_CTX      = 16384
+
+# Rete di sicurezza aggiuntiva contro il thinking mode di Qwen3-VL, che
+# abbiamo verificato NON essere sempre rispettato dal solo parametro API
+# think=False (log reale: 3229 caratteri di ragionamento generati comunque
+# nonostante think=False). "/no_think" è un'istruzione di controllo che il
+# modello riconosce a livello di chat template — indipendente da eventuali
+# bug della libreria ollama-python, quindi più affidabile. Va nel testo
+# del messaggio, non nelle options.
+#
+# È una convenzione specifica della famiglia Qwen3 (non esiste "thinking
+# mode" su Qwen2.5): va aggiunta SOLO se il modello in uso è Qwen3,
+# altrimenti su Qwen2.5 sarebbe testo estraneo nel prompt senza alcun
+# significato per il modello, rischiando solo di confonderlo inutilmente.
+def suffisso_no_think(modello: str) -> str:
+    return "\n\n/no_think" if "qwen3" in modello.lower() else ""
 
 # Template per il rilevamento automatico presenza/assenza etichetta (crop del
 # modulo CODICE/NUMERO vuoto, generato dalla stessa pipeline zoom-3x — vedi
@@ -977,8 +1036,8 @@ etichetta_nome_cognome_medico:
 # MODELLO_LEGGERO viene sovrascritto a MODELLO_PESANTE se l'utente passa
 # esplicitamente --model da riga di comando (per test A/B con un solo
 # modello uniforme su tutti i gruppi).
-MODELLO_PESANTE = "qwen2.5vl:32b"
-MODELLO_LEGGERO = "qwen2.5vl:7b"
+MODELLO_PESANTE = os.getenv("MODELLO_PESANTE", "qwen3-vl:30b")
+MODELLO_LEGGERO = os.getenv("MODELLO_LEGGERO", "qwen3-vl:8b")
 
 GRUPPI_ESTRAZIONE = [
     ("critico", PROMPT_GRUPPO_CRITICO, True, "pesante"),
@@ -986,6 +1045,32 @@ GRUPPI_ESTRAZIONE = [
 ]
 
 # ─── Funzioni core ─────────────────────────────────────────────────────────────
+
+_modello_attivo = None
+
+
+def _prepara_modello(modello: str):
+    """Assicura che SOLO `modello` sia caricato in Ollama, scaricando
+    esplicitamente il precedente se diverso.
+
+    Perché serve: Ollama tiene un modello in memoria per keep_alive
+    (default 5 minuti) anche dopo l'ultima chiamata. Passando da
+    MODELLO_PESANTE a MODELLO_LEGGERO (e viceversa, per le correzioni di
+    date_corrector.py) a distanza di pochi secondi, senza questo
+    accorgimento i due modelli restano ENTRAMBI caricati insieme e
+    competono per la stessa VRAM — verificato con `ollama ps`: con
+    entrambi caricati lo split GPU crollava a 97%/3% e 90%/10% CPU/GPU
+    (quasi tutto su CPU per entrambi), nonostante num_gpu al massimo.
+    """
+    global _modello_attivo
+    if _modello_attivo is not None and _modello_attivo != modello:
+        try:
+            ollama.generate(model=_modello_attivo, keep_alive=0)
+            log.info(f"  Scaricato {_modello_attivo} per liberare VRAM prima di caricare {modello}")
+        except Exception as e:
+            log.warning(f"  Impossibile scaricare {_modello_attivo} (proseguo comunque): {e}")
+    _modello_attivo = modello
+
 
 def get_template_etichetta():
     """Carica (una sola volta) il template del modulo CODICE/NUMERO vuoto."""
@@ -1012,7 +1097,11 @@ def get_easyocr_reader():
         try:
             import easyocr
             log.info("Caricamento EasyOCR (fallback rilevamento etichetta)...")
-            _easyocr_reader = easyocr.Reader(["it"], gpu=(NUM_GPU == 1))
+            # NUM_GPU ora è: None=lascia decidere Ollama (default), 0=forza CPU,
+            # N=forza N layer su GPU. Per EasyOCR (parametro gpu davvero
+            # booleano) None e qualunque valore positivo intendono "usa la
+            # GPU"; solo 0 esplicito significa "no".
+            _easyocr_reader = easyocr.Reader(["it"], gpu=(NUM_GPU is None or NUM_GPU > 0))
         except Exception as e:
             log.warning(f"EasyOCR non disponibile, fallback disabilitato: {e}")
             _easyocr_reader = False  # sentinella: non ritentare ad ogni ricetta
@@ -1054,8 +1143,17 @@ def pdf_to_base64(pdf_path: Path) -> str:
 
 
 def pulisci_json(testo: str) -> str:
-    """Estrae blocco JSON dalla risposta del modello."""
+    """Estrae blocco JSON dalla risposta del modello.
+
+    Rimuove anche un eventuale blocco <think>...</think> residuo — con
+    think=False non dovrebbe comparire, ma non tutte le combinazioni di
+    versione ollama/ollama-python lo rispettano in modo affidabile, quindi
+    meglio ripulire comunque prima di cercare le graffe: se il ragionamento
+    del modello contenesse per caso una graffa, la regex sotto potrebbe
+    prendere il pezzo sbagliato.
+    """
     testo = testo.strip()
+    testo = re.sub(r'<think>[\s\S]*?</think>', '', testo, flags=re.IGNORECASE).strip()
     match = re.search(r'\{[\s\S]*\}', testo)
     return match.group(0).strip() if match else testo
 
@@ -1431,7 +1529,10 @@ def get_date_corrector():
             # DateCorrector non gestisce più data_prescrizione/data_emissione
             # affatto (prese esclusivamente da Regione in merge_regione.py) —
             # gestisce solo i crop dedicati per gli altri campi.
-            _date_corrector = DateCorrector(qwen_model="qwen2.5vl:32b")
+            # Riusa MODELLO_PESANTE invece di una stringa hardcoded separata:
+            # prima erano due valori indipendenti che potevano disallinearsi
+            # (cambiando MODELLO_PESANTE sopra, qui restava il vecchio modello).
+            _date_corrector = DateCorrector(qwen_model=MODELLO_PESANTE)
         except Exception as e:
             log.warning(f'DateCorrector non disponibile: {e}')
     return _date_corrector
@@ -1525,22 +1626,48 @@ def estrai_dati(pdf_path: Path) -> dict:
 
         modello_gruppo = MODELLO_PESANTE if peso == "pesante" else MODELLO_LEGGERO
         log.info(f"  [{nome_gruppo}] uso modello {modello_gruppo} ({peso})")
+        _prepara_modello(modello_gruppo)
+
+        # num_gpu incluso SOLO se qualcuno lo forza esplicitamente (es. --gpu 0
+        # per debug CPU-only). Di default (NUM_GPU=None) il parametro non viene
+        # proprio passato, lasciando che sia Ollama a decidere in autonomia in
+        # base alla VRAM realmente disponibile — vedi commento sopra NUM_GPU
+        # sul perché forzare un valore fisso (99) ha peggiorato le cose.
+        opzioni_chiamata = {"num_ctx": NUM_CTX, "temperature": 0.0}
+        if NUM_GPU is not None:
+            opzioni_chiamata["num_gpu"] = NUM_GPU
 
         try:
             response = ollama.chat(
                 model=modello_gruppo,
                 messages=[{
                     "role": "user",
-                    "content": prompt_finale,
+                    "content": prompt_finale + suffisso_no_think(modello_gruppo),
                     "images": [img_b64]
                 }],
-                options={
-                    "num_gpu": NUM_GPU,
-                    "num_ctx": NUM_CTX,
-                    "temperature": 0.0
-                }
+                # Qwen3-VL supporta il "thinking mode": lo disabilitiamo sempre
+                # esplicitamente, sia perché rallenta la risposta (token di
+                # ragionamento aggiuntivi) sia perché, se non onorato per un
+                # bug di libreria/versione, può inserire testo prima del JSON
+                # e rompere pulisci_json() più sotto.
+                think=False,
+                options=opzioni_chiamata
             )
             testo = response["message"]["content"]
+
+            # Diagnostica: se il campo "thinking" separato non è vuoto,
+            # significa che think=False NON è stato rispettato dalla
+            # combinazione ollama/ollama-python in uso — il modello ha
+            # comunque generato token di ragionamento (costano tempo)
+            # anche se sono tenuti fuori da "content" e non rompono il
+            # JSON. Utile per capire se il rallentamento viene da qui.
+            pensiero = response["message"].get("thinking")
+            if pensiero:
+                log.warning(
+                    f"  [{nome_gruppo}] think=False non rispettato: il modello ha "
+                    f"comunque generato {len(pensiero)} caratteri di ragionamento nascosto"
+                )
+            log.info(f"  [{nome_gruppo}] risposta grezza: {len(testo)} caratteri")
         except Exception as e:
             log.error(f"  [{nome_gruppo}] Errore Ollama ({modello_gruppo}): {e}")
             continue
@@ -1600,6 +1727,10 @@ def estrai_dati(pdf_path: Path) -> dict:
     # NOTA: data_prescrizione/data_emissione vengono prese ESCLUSIVAMENTE
     # da Regione in merge_regione.py — non vengono nemmeno più estratte qui,
     # né da questo blocco né dal prompt principale (rimosse del tutto).
+    # Le correzioni di date_corrector.py usano tutte MODELLO_PESANTE: lo
+    # scarico qui esplicitamente il modello leggero appena usato sopra,
+    # altrimenti resterebbero caricati insieme (vedi _prepara_modello).
+    _prepara_modello(MODELLO_PESANTE)
     corrector = get_date_corrector()
 
     # Guardia: se l'etichetta è CONFERMATA assente (confidenza sufficiente,
@@ -1724,7 +1855,12 @@ def main():
     ap.add_argument("--test", action="store_true",
                     help="Elabora solo la prima ricetta trovata")
     ap.add_argument("--gpu", type=int, default=NUM_GPU,
-                    help="0=CPU, 1=GPU (default: 1)")
+                    help="Numero di layer del modello da offloadare su GPU, non un booleano. "
+                         "Default: nessun valore forzato, decide Ollama in autonomia in base "
+                         "alla VRAM disponibile (consigliato). 0=forza CPU-only (debug). "
+                         "ATTENZIONE: forzare un numero alto (es. 99) con un modello più "
+                         "grande della VRAM disponibile può causare uno sforamento nella "
+                         "shared GPU memory di Windows, molto più lento del default automatico.")
     ap.add_argument("--model", type=str, default=None,
                     help=f"Se specificato, forza LO STESSO modello su tutti e 4 i "
                          f"gruppi di estrazione (utile per test A/B). Se omesso, "
@@ -1753,7 +1889,7 @@ def main():
         pdf_files = [pdf_files[0]]
         log.info("Modalità TEST — elaboro solo la prima ricetta")
 
-    log.info(f"Modello: {OLLAMA_MODEL} | GPU: {NUM_GPU} | Ricette: {len(pdf_files)}")
+    log.info(f"Modello: {OLLAMA_MODEL} | GPU: {NUM_GPU if NUM_GPU is not None else 'auto (decide Ollama)'} | Ricette: {len(pdf_files)}")
 
     OUTPUT_DIR.mkdir(exist_ok=True)
     risultati, errori = [], []

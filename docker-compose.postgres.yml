@@ -1,0 +1,34 @@
+# docker-compose.postgres.yml
+# ------------------------------
+# Database PostgreSQL, containerizzato — stesso principio già usato
+# per Ollama (docker-compose.ollama.yml): volume persistente per non
+# perdere i dati a un eventuale reset di Docker Desktop, rete condivisa
+# con gli altri servizi.
+#
+# Le credenziali si leggono da un file .env (MAI committato su Git —
+# vedi .gitignore) — copia .env.example in .env e personalizza i
+# valori prima del primo avvio.
+#
+# Uso:
+#   docker network create ats-pipeline_default   (una sola volta, se non esiste già)
+#   docker compose -f docker-compose.postgres.yml up -d
+
+networks:
+  ats-pipeline_default:
+    external: true
+
+services:
+  ats-postgres:
+    image: postgres:16
+    container_name: ats-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - ./postgres-dati:/var/lib/postgresql/data
+    networks:
+      - ats-pipeline_default
+    restart: unless-stopped

@@ -77,7 +77,10 @@ def esegui_estrazione(input_dir: Path, output_dir: Path, solo_test: bool,
         pdf_files = [pdf_files[0]]
         log.info("Modalità TEST — elaboro solo la prima ricetta")
 
-    log.info(f"[1/4] Estrazione OCR — modello: {model} | GPU: {gpu} | Ricette: {len(pdf_files)}")
+    log.info(
+        f"[1/4] Estrazione OCR — modello: {model or f'{ocr_cannabis.MODELLO_PESANTE} (pesante) / {ocr_cannabis.MODELLO_LEGGERO} (leggero)'} "
+        f"| GPU: {gpu if gpu is not None else 'auto (decide Ollama)'} | Ricette: {len(pdf_files)}"
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     risultati, errori = [], []
@@ -203,7 +206,9 @@ def main():
     ap.add_argument("--test", action="store_true",
                      help="Elabora solo la prima ricetta trovata (per test rapidi)")
     ap.add_argument("--gpu", type=int, default=ocr_cannabis.NUM_GPU,
-                     help="0=CPU, 1=GPU (default: 1)")
+                     help="Numero di layer del modello da offloadare su GPU, non un booleano. "
+                          "Default: nessun valore forzato, decide Ollama in autonomia in base "
+                          "alla VRAM disponibile (consigliato). 0=forza CPU-only (debug).")
     ap.add_argument("--model", type=str, default=None,
                      help=f"Se specificato, forza lo stesso modello su tutti i gruppi "
                           f"di estrazione. Se omesso, usa la strategia mista di default "

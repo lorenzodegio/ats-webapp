@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>Difformità — ATS Cannabis OCR</title>
+</head>
+<body>
+    <!-- Placeholder minimo, solo per sbloccare i test di backend. -->
+    <nav>
+        <a href="/">Dashboard</a> |
+        <a href="/jobs/nuovo">Nuova elaborazione</a> |
+        <a href="/jobs">Elaborazioni</a> |
+        <a href="/archivio">Archivio</a> |
+        <a href="/difformita">Difformità</a> |
+        <a href="/logout">Logout ({{ utente.username }})</a>
+    </nav>
+    <hr>
+
+    <h1>Difformità rilevate</h1>
+
+    {% if difformita %}
+    <table border="1" cellpadding="4">
+        <tr>
+            <th>ID</th>
+            <th>Tipo</th>
+            <th>Descrizione</th>
+            <th>Gravità</th>
+            <th>Prescrizione</th>
+        </tr>
+        {% for d in difformita %}
+        <tr>
+            <td>{{ d.id }}</td>
+            <td>{{ d.tipo }}</td>
+            <td>{{ d.descrizione }}</td>
+            <td>{{ d.gravita }}</td>
+            <td>{{ d.prescrizione_id }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% else %}
+    <p>Nessuna difformità registrata.</p>
+    {% endif %}
+</body>
+</html>

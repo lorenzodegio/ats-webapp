@@ -13,6 +13,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "app"))
 
+from dotenv import load_dotenv
+load_dotenv()  # prima di importare database.py, che legge le variabili d'ambiente all'import
+
 from database import init_db, SessionLocal
 from models import Utente
 from auth import hash_password

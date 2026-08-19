@@ -1,24 +1,57 @@
-# Dati sanitari reali — MAI committare (vincolo "privacy by design", documento Sez. 1.1)
-dati/
-uploads/
-output/
-ollama-dati/
-
-# Database locale (contiene dati estratti dalle prescrizioni)
-*.db
-*.db-journal
-
-# Ambiente Python
-venv/
+# ============================================================
+# Python
+# ============================================================
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+.Python
+*.egg-info/
 
-# Editor / sistema operativo
+# ============================================================
+# Ambiente virtuale
+# ============================================================
+venv/
+.venv/
+
+
+
+
+# ============================================================
+# Database locale
+# ============================================================
+# Il vecchio file SQLite, ormai sostituito da PostgreSQL — non ha
+# senso versionarlo, ed è comunque dati generati, non codice.
+*.db
+*.sqlite
+*.sqlite3
+
+# ============================================================
+# Dati sensibili — ricette, PDF caricati, output OCR
+# ============================================================
+# Contengono dati sanitari reali (nome/cognome paziente, codice
+# fiscale, prescrizioni mediche, nome medico) — NON vanno mai in un
+# commit, nemmeno per essere cancellati dopo: la cronologia Git li
+# ricorderebbe comunque per sempre, anche cancellandoli dalla working
+# directory. Se una di queste cartelle non esiste ancora nel progetto,
+# la riga non fa danno (Git la ignora semplicemente).
+dati/
+output/
+uploads/
+ricette/
+excel_regione/
+
+# ============================================================
+# Docker / dati persistenti dei container
+# ============================================================
+ollama-dati/
+postgres-dati/
+
+# ============================================================
+# Editor / OS
+# ============================================================
 .vscode/
 .idea/
+*.swp
 .DS_Store
 Thumbs.db
-
-# Configurazioni locali con eventuali segreti
-.env

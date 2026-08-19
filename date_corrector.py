@@ -36,6 +36,32 @@ log = logging.getLogger(__name__)
 
 IMAGE_ZOOM = 3.0
 
+_THINK_BLOCK_RE = re.compile(r'<think>[\s\S]*?</think>', re.IGNORECASE)
+
+# Rete di sicurezza aggiuntiva contro il thinking mode di Qwen3-VL — vedi
+# la stessa funzione e spiegazione in ocr_cannabis.py. think=False da solo
+# non è sempre rispettato (verificato con log reali), "/no_think" agisce
+# a livello di chat template ed è più affidabile. Condizionale alla
+# famiglia Qwen3: su Qwen2.5 (nessun thinking mode) sarebbe solo testo
+# estraneo nel prompt.
+def _suffisso_no_think(modello: str) -> str:
+    return "\n\n/no_think" if "qwen3" in modello.lower() else ""
+
+
+def _contenuto_pulito(response) -> str:
+    """Estrae response["message"]["content"] rimuovendo un eventuale blocco
+    <think>...</think> residuo.
+
+    Qwen3-VL supporta il thinking mode: tutte le chiamate qui sotto passano
+    già think=False esplicitamente, ma questo helper resta come rete di
+    sicurezza — queste funzioni fanno parsing rigido (confronti di
+    sottostringa tipo "INCERTO" in testo, o json.loads diretto) e non hanno
+    la stessa tolleranza di pulisci_json() in ocr_cannabis.py: un residuo di
+    ragionamento non rimosso qui romperebbe silenziosamente la lettura.
+    """
+    testo = response["message"]["content"]
+    return _THINK_BLOCK_RE.sub('', testo).strip()
+
 # Valori validi per il codice esenzione — usati sia dal prompt principale
 # (in ocr_cannabis.py) sia da questo modulo per il crop dedicato.
 VALORI_ESENZIONE_VALIDI = ["TDL", "048", "046", "019", "005", "020", "L99", "E30"]
@@ -556,12 +582,16 @@ class DateCorrector:
     è stata rimossa perché il suo risultato veniva comunque scartato.
     """
 
-    def __init__(self, qwen_model: str = "qwen2.5vl:7b", usa_qwen_su_crop: bool = True):
+    def __init__(self, qwen_model: str = "qwen3-vl:8b", usa_qwen_su_crop: bool = True):
         """
         Inizializza il correttore.
 
         Args:
-            qwen_model: modello Ollama da usare per la lettura dei crop
+            qwen_model: modello Ollama da usare per la lettura dei crop.
+                Il default qui vale solo per uso standalone di questa classe
+                (es. test/debug diretti su date_corrector.py) — quando viene
+                istanziata da ocr_cannabis.py::get_date_corrector(), riceve
+                sempre esplicitamente MODELLO_PESANTE, che ha priorità.
             usa_qwen_su_crop: se False, disattiva tutte le chiamate Qwen
                    sui crop (nessuna correzione viene tentata) — utile
                    solo per test/debug
@@ -631,12 +661,13 @@ class DateCorrector:
                 model=self.qwen_model,
                 messages=[{
                     "role": "user",
-                    "content": PROMPT_CROP_ESENZIONE,
+                    "content": PROMPT_CROP_ESENZIONE + _suffisso_no_think(self.qwen_model),
                     "images": [img_b64]
                 }],
+                think=False,
                 options={"temperature": 0.0}
             )
-            testo = response["message"]["content"].strip().upper()
+            testo = _contenuto_pulito(response).upper()
             log.info(f"    [codice_esenzione] risposta grezza crop: {testo!r}")
 
             if "NESSUNO" in testo:
@@ -710,12 +741,13 @@ class DateCorrector:
                 model=self.qwen_model,
                 messages=[{
                     "role": "user",
-                    "content": PROMPT_CROP_TOTALE,
+                    "content": PROMPT_CROP_TOTALE + _suffisso_no_think(self.qwen_model),
                     "images": [img_b64]
                 }],
+                think=False,
                 options={"temperature": 0.0}
             )
-            testo = response["message"]["content"].strip()
+            testo = _contenuto_pulito(response)
             log.info(f"    [totale_prescrizione] risposta grezza crop: {testo!r}")
 
             if "INCERTO" in testo.upper():
@@ -815,12 +847,13 @@ class DateCorrector:
                 model=self.qwen_model,
                 messages=[{
                     "role": "user",
-                    "content": PROMPT_CROP_TESTO_PRESCRIZIONE,
+                    "content": PROMPT_CROP_TESTO_PRESCRIZIONE + _suffisso_no_think(self.qwen_model),
                     "images": [img_b64]
                 }],
+                think=False,
                 options={"temperature": 0.0}
             )
-            testo = response["message"]["content"].strip()
+            testo = _contenuto_pulito(response)
             log.info(f"    [testo_prescrizione] risposta grezza crop: {testo!r}")
 
             if testo.upper() == "INCERTO":
@@ -873,12 +906,13 @@ class DateCorrector:
                 model=self.qwen_model,
                 messages=[{
                     "role": "user",
-                    "content": PROMPT_CROP_CODICE_FISCALE,
+                    "content": PROMPT_CROP_CODICE_FISCALE + _suffisso_no_think(self.qwen_model),
                     "images": [img_b64]
                 }],
+                think=False,
                 options={"temperature": 0.0}
             )
-            testo = response["message"]["content"].strip().upper()
+            testo = _contenuto_pulito(response).upper()
             log.info(f"    [codice_fiscale] risposta grezza crop: {testo!r}")
 
             if "INCERTO" in testo:
@@ -932,12 +966,13 @@ class DateCorrector:
                 model=self.qwen_model,
                 messages=[{
                     "role": "user",
-                    "content": PROMPT_CROP_NOME_ASSISTITO,
+                    "content": PROMPT_CROP_NOME_ASSISTITO + _suffisso_no_think(self.qwen_model),
                     "images": [img_b64]
                 }],
+                think=False,
                 options={"temperature": 0.0}
             )
-            testo = response["message"]["content"].strip()
+            testo = _contenuto_pulito(response)
             log.info(f"    [nome_cognome_assistito] risposta grezza crop: {testo!r}")
 
             if testo.upper() == "INCERTO":
@@ -1027,12 +1062,13 @@ class DateCorrector:
                 model=self.qwen_model,
                 messages=[{
                     "role": "user",
-                    "content": PROMPT_CROP_DATA_PREPARAZIONE,
+                    "content": PROMPT_CROP_DATA_PREPARAZIONE + _suffisso_no_think(self.qwen_model),
                     "images": [img_b64]
                 }],
+                think=False,
                 options={"temperature": 0.0}
             )
-            testo = response["message"]["content"].strip()
+            testo = _contenuto_pulito(response)
             log.info(f"    [data_etichetta_preparazione] risposta grezza crop dinamico: {testo!r}")
 
             # Rimuove eventuale formattazione markdown (**grassetto**, `code`,
@@ -1158,15 +1194,26 @@ class DateCorrector:
                 model=self.qwen_model,
                 messages=[{
                     "role": "user",
-                    "content": prompt_finale,
+                    "content": prompt_finale + _suffisso_no_think(self.qwen_model),
                     "images": [img_b64]
                 }],
+                think=False,
                 options={"temperature": 0.0}
             )
-            testo = response["message"]["content"].strip()
+            testo = _contenuto_pulito(response)
             # Rimuove eventuali backtick/markdown attorno al JSON
             testo_pulito = re.sub(r'^```(?:json)?\s*|\s*```$', '', testo, flags=re.IGNORECASE).strip()
-            risultato = json.loads(testo_pulito)
+            try:
+                risultato = json.loads(testo_pulito)
+            except json.JSONDecodeError:
+                # Fallback difensivo: se resta comunque del testo prima/dopo
+                # il JSON (es. thinking non rimosso del tutto da un bug di
+                # libreria), prova a isolare il blocco {...} più esterno
+                # invece di far fallire l'intera lettura dell'etichetta.
+                match = re.search(r'\{[\s\S]*\}', testo_pulito)
+                if not match:
+                    raise
+                risultato = json.loads(match.group(0))
             if not isinstance(risultato, dict):
                 return {}
             return risultato

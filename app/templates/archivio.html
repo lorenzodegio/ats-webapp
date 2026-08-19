@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>Archivio — ATS Cannabis OCR</title>
+</head>
+<body>
+    <!-- Placeholder minimo, solo per sbloccare i test di backend. -->
+    <nav>
+        <a href="/">Dashboard</a> |
+        <a href="/jobs/nuovo">Nuova elaborazione</a> |
+        <a href="/jobs">Elaborazioni</a> |
+        <a href="/archivio">Archivio</a> |
+        <a href="/difformita">Difformità</a> |
+        <a href="/logout">Logout ({{ utente.username }})</a>
+    </nav>
+    <hr>
+
+    <h1>Archivio prescrizioni</h1>
+
+    <form action="/archivio" method="get">
+        <input type="text" name="barcode" placeholder="Cerca per barcode" value="{{ barcode_cercato }}">
+        <button type="submit">Cerca</button>
+    </form>
+
+    {% if prescrizioni %}
+    <table border="1" cellpadding="4">
+        <tr>
+            <th>ID</th>
+            <th>Barcode</th>
+            <th>Excel scritto</th>
+            <th>Job</th>
+        </tr>
+        {% for p in prescrizioni %}
+        <tr>
+            <td>{{ p.id }}</td>
+            <td>{{ p.barcode }}</td>
+            <td>{{ "sì" if p.excel_scritto else "no" }}</td>
+            <td>{{ p.job_id }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% elif barcode_cercato %}
+    <p>Nessuna prescrizione trovata per "{{ barcode_cercato }}".</p>
+    {% else %}
+    <p>Nessuna prescrizione trovata.</p>
+    {% endif %}
+</body>
+</html>
