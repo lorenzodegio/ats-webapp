@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+venv/
+.env
+ats_cannabis.db
+uploads/
+sharepoint_finto/
+.DS_Store

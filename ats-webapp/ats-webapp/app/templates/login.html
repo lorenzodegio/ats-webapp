@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Accedi — ATS Cannabis OCR</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="login-wrapper">
+    <div class="login-card">
+      <div class="login-card__brand">ATS OCR</div>
+      <div class="login-card__sottotitolo">Pipeline Manager — accesso operatori</div>
+
+      {% if errore %}
+      <div class="errore-form">{{ errore }}</div>
+      {% endif %}
+
+      <form method="post" action="/login">
+        <div class="campo">
+          <label for="username">Nome utente</label>
+          <input type="text" id="username" name="username" required autofocus>
+        </div>
+        <div class="campo">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" required>
+        </div>
+        <button type="submit" class="btn btn--primario" style="width:100%; justify-content:center;">
+          Accedi
+        </button>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

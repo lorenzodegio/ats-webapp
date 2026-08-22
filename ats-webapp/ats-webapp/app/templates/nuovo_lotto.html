@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block titolo %}Nuovo lotto — ATS Cannabis OCR{% endblock %}
+
+{% block contenuto %}
+<div class="main__header">
+  <div>
+    <h1>Nuovo lotto</h1>
+    <div class="sottotitolo">Crea il lotto mensile e carica il PDF combinato delle prescrizioni</div>
+  </div>
+</div>
+
+{% if request.query_params.get('errore') %}
+<div class="errore-form">{{ request.query_params.get('errore') }}</div>
+{% endif %}
+
+<div class="wizard-steps" id="wizard-steps">
+  <div class="wizard-step wizard-step--attivo" data-step-indicatore="1">
+    <span class="wizard-step__numero">1</span>Dati lotto
+  </div>
+  <div class="wizard-step" data-step-indicatore="2">
+    <span class="wizard-step__numero">2</span>Caricamento
+  </div>
+  <div class="wizard-step" data-step-indicatore="3">
+    <span class="wizard-step__numero">3</span>Conferma
+  </div>
+</div>
+
+<div class="card">
+  <form id="form-wizard" method="post" action="/lotti/nuovo" enctype="multipart/form-data">
+
+    <!-- Step 1: Dati lotto -->
+    <div class="wizard-panel wizard-panel--attivo" data-step="1">
+      <div class="campo" id="campo-nome">
+        <label for="input-nome">Nome lotto</label>
+        <input type="text" id="input-nome" name="nome" placeholder="es. LUGLIO 2026" required>
+        <span class="campo__messaggio-errore">Dai un nome al lotto prima di continuare.</span>
+      </div>
+      <div style="display:flex; gap:16px;">
+        <div class="campo" style="flex:1;">
+          <label for="input-mese">Mese</label>
+          <select id="input-mese" name="mese" required>
+            <option value="1">Gennaio</option><option value="2">Febbraio</option>
+            <option value="3">Marzo</option><option value="4">Aprile</option>
+            <option value="5">Maggio</option><option value="6">Giugno</option>
+            <option value="7">Luglio</option><option value="8" selected>Agosto</option>
+            <option value="9">Settembre</option><option value="10">Ottobre</option>
+            <option value="11">Novembre</option><option value="12">Dicembre</option>
+          </select>
+        </div>
+        <div class="campo" style="flex:1;">
+          <label for="input-anno">Anno</label>
+          <select id="input-anno" name="anno" required>
+            {% for anno in range(anno_corrente - 2, anno_corrente + 2) %}
+            <option value="{{ anno }}"{% if anno == anno_corrente %} selected{% endif %}>{{ anno }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 2: Caricamento -->
+    <div class="wizard-panel" data-step="2">
+      <div class="campo">
+        <label>PDF combinato prescrizioni (obbligatorio)</label>
+        <label class="dropzone" id="dropzone-pdf" for="input-file-pdf">
+          <div>Trascina qui il PDF, oppure clicca per selezionarlo</div>
+          <div style="font-size:12px; margin-top:6px;">Formato accettato: .pdf</div>
+          <div class="dropzone__nome-file" id="nome-file-pdf"></div>
+        </label>
+        <input type="file" id="input-file-pdf" name="file_pdf" accept="application/pdf" style="display:none" required>
+      </div>
+
+      <div class="campo">
+        <label>Excel regionale (opzionale in questa fase, puoi aggiungerlo dopo)</label>
+        <label class="dropzone" id="dropzone-excel" for="input-file-excel" style="padding:24px;">
+          <div>Trascina qui l'Excel, oppure clicca per selezionarlo</div>
+          <div style="font-size:12px; margin-top:6px;">Formato accettato: .xlsx / .xls</div>
+          <div class="dropzone__nome-file" id="nome-file-excel"></div>
+        </label>
+        <input type="file" id="input-file-excel" name="file_excel" accept=".xlsx,.xls" style="display:none">
+      </div>
+    </div>
+
+    <!-- Step 3: Conferma -->
+    <div class="wizard-panel" data-step="3">
+      <div class="riepilogo-riga">
+        <span class="riepilogo-riga__etichetta">Nome lotto</span>
+        <span class="riepilogo-riga__valore" id="riepilogo-nome">—</span>
+      </div>
+      <div class="riepilogo-riga">
+        <span class="riepilogo-riga__etichetta">Periodo</span>
+        <span class="riepilogo-riga__valore" id="riepilogo-periodo">—</span>
+      </div>
+      <div class="riepilogo-riga">
+        <span class="riepilogo-riga__etichetta">PDF prescrizioni</span>
+        <span class="riepilogo-riga__valore mono" id="riepilogo-pdf">—</span>
+      </div>
+      <div class="riepilogo-riga">
+        <span class="riepilogo-riga__etichetta">Excel regionale</span>
+        <span class="riepilogo-riga__valore mono" id="riepilogo-excel">Non caricato</span>
+      </div>
+      <div class="riepilogo-riga">
+        <span class="riepilogo-riga__etichetta">Avviato da</span>
+        <span class="riepilogo-riga__valore">{{ utente.nome_completo }}</span>
+      </div>
+    </div>
+
+    <div class="wizard-azioni">
+      <button type="button" class="btn btn--secondario" id="btn-indietro" style="visibility:hidden;">Indietro</button>
+      <button type="button" class="btn btn--primario" id="btn-avanti">Avanti</button>
+      <button type="submit" class="btn btn--primario" id="btn-avvia" style="display:none;">Crea lotto e avvia preprocessing</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block script %}
+<script src="/static/js/wizard-nuovo-lotto.js"></script>
+{% endblock %}
