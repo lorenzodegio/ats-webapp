@@ -79,12 +79,21 @@ def ocr_fallback(region_bgr: np.ndarray, reader) -> bool:
     usati per l'estrazione dei campi etichetta (prezzi, THC, nomi
     paziente/medico, avvertenze, data preparazione, data scadenza) —
     se l'etichetta è vera, di solito compare almeno uno di questi
-    elementi; un modulo prestampato vuoto non ne ha nessuno."""
+    elementi; un modulo prestampato vuoto non ne ha nessuno.
+
+    PRICE_PATTERN volutamente ESCLUSO da questo controllo (anche se
+    resta definito sopra, per eventuale uso altrove): il totale della
+    prescrizione (es. "156,15") è sempre fisicamente vicino al box
+    CODICE/NUMERO su OGNI ricetta, etichetta presente o no — verificato
+    concretamente su un caso reale (Farmacia Tili, Vismara) dove quel
+    numero, non l'etichetta, faceva scattare "presente" per errore.
+    Non è un segnale specifico dell'etichetta, quindi non va usato qui.
+    """
     results = reader.readtext(region_bgr)
     for _, text, conf in results:
         if conf < 0.4:
             continue
-        if (PRICE_PATTERN.search(text) or THC_PATTERN.search(text)
+        if (THC_PATTERN.search(text)
                 or NOME_PATTERN.search(text) or AVVERTENZE_PATTERN.search(text)
                 or DATA_PREP_PATTERN.search(text) or DATA_SCADENZA_PATTERN.search(text)):
             return True
@@ -125,6 +134,20 @@ def detect_etichetta_from_images(page_gray: np.ndarray, template_gray: np.ndarra
         # sempre tra 0.25 e 0.51 su 30/30 ricette, MAI un'etichetta vera).
         # Stessa verifica OCR già usata per la zona grigia, come ulteriore
         # conferma prima di dichiarare "presente" con alta confidenza.
+        #
+        # Cerca in TUTTA la fascia inferiore della pagina, non solo nel
+        # margine attorno al crop stretto — un tentativo precedente aveva
+        # ristretto la ricerca a un margine attorno a (x,y,w,h), ma
+        # un'etichetta VERA è spesso fisicamente più grande del box
+        # CODICE/NUMERO usato come riferimento (viene incollata sopra e
+        # intorno) — verificato su tre farmacie CON profilo dedicato
+        # (Pomi, Comunale N.2, Ramella) che finivano scartate come
+        # "assente" perché il controllo cercava in un'area troppo
+        # piccola per contenerle. Il vero problema che aveva motivato la
+        # fascia stretta (Vismara/Tili: il totale prescrizione, sempre
+        # vicino al box, veniva scambiato per un prezzo etichetta) è
+        # già risolto togliendo PRICE_PATTERN dai segnali OCR sopra —
+        # non serve più restringere anche la zona di ricerca.
         if reader is not None and page_bgr is not None:
             page_h = page_gray.shape[0]
             y_start = int(page_h * search_region_frac[0])
@@ -137,11 +160,11 @@ def detect_etichetta_from_images(page_gray: np.ndarray, template_gray: np.ndarra
         return EtichettaResult(True, "alta", score, (x, y, w, h), "struttura molto diversa dal template (etichetta presente)")
 
     # zona grigia: serve conferma OCR.
-    # Cerca in TUTTA la fascia inferiore della pagina (stessa banda larga
-    # usata per il template matching), non solo nel crop stretto (x,y,w,h)
-    # usato per l'SSIM — quel crop può essere leggermente disallineato su
-    # farmacie con layout diverso da quella di calibrazione del template,
-    # tagliando fuori proprio la colonna prezzi che l'OCR dovrebbe trovare.
+    # Cerca in TUTTA la fascia inferiore della pagina — stesso motivo del
+    # ramo sopra: un margine stretto attorno al box CODICE/NUMERO non
+    # basta a coprire un'etichetta vera fisicamente più grande di quel
+    # box. PRICE_PATTERN già rimosso dai segnali OCR (sopra) evita il
+    # falso positivo che aveva motivato la fascia stretta in origine.
     if reader is not None and page_bgr is not None:
         page_h = page_gray.shape[0]
         y_start = int(page_h * search_region_frac[0])

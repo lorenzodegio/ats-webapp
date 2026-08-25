@@ -1304,17 +1304,38 @@ class DateCorrector:
                 f"il modello a 'trovare' campi che in realtà non c'erano)"
             )
 
-        risultato = self._leggi_etichetta_con_profilo(crop_etichetta, regola)
-        if not self._risultato_plausibile(risultato):
-            log.info("  correggi_etichetta_per_farmacia: nessun risultato plausibile, nessun altro tentativo")
-            return dati
-
         CAMPI_ETICHETTA = [
             "data_etichetta_preparazione", "etichetta_data_scadenza",
             "etichetta_nome_cognome_paziente", "etichetta_nome_cognome_medico",
             "etichetta_prezzo_sost", "etichetta_prezzo_on", "etichetta_prezzo_rec",
             "etichetta_prezzo_iva", "etichetta_prezzo_tot", "etichetta_avvertenze",
         ]
+
+        risultato = self._leggi_etichetta_con_profilo(crop_etichetta, regola)
+        if not self._risultato_plausibile(risultato):
+            # Non ci si ferma a scartare il NUOVO tentativo: la stessa prova
+            # raccolta qui (rilettura dedicata, con ancoraggi espliciti,
+            # che non trova quasi nulla) è evidenza forte che l'etichetta
+            # non c'è affatto — quindi anche i valori del passaggio
+            # "critico" originale per questi stessi campi sono sospetti
+            # allo stesso modo (probabilmente la stessa allucinazione,
+            # es. il timbro DATA SPEDIZIONE scambiato per data etichetta).
+            # Prima restavano intatti perché si scartava solo il nuovo
+            # tentativo senza mai riconsiderare il vecchio — qui li
+            # forziamo vuoti, coerente con "etichetta confermata assente"
+            # già usato altrove nel codice.
+            campi_da_svuotare = [c for c in CAMPI_ETICHETTA if str(dati.get(c, "")).strip()]
+            if campi_da_svuotare:
+                log.info(
+                    f"  correggi_etichetta_per_farmacia: nessun risultato plausibile — "
+                    f"svuoto anche i campi del passaggio critico ({', '.join(campi_da_svuotare)}), "
+                    f"probabile stessa allucinazione"
+                )
+                for campo in campi_da_svuotare:
+                    dati[campo] = ""
+            else:
+                log.info("  correggi_etichetta_per_farmacia: nessun risultato plausibile, nessun altro tentativo")
+            return dati
         etichetta_fonte = nome_farmacia if nome_farmacia in PROFILI_FARMACIA else "generico"
         for campo in CAMPI_ETICHETTA:
             valore = str(risultato.get(campo, "")).strip()

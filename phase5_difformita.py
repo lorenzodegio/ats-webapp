@@ -50,7 +50,7 @@ logger = logging.getLogger("Phase5")
 
 # ─── Configurazione LLM per check semantici ────────────────────────────────────
 
-OLLAMA_MODEL_TESTO = os.getenv("OLLAMA_MODEL_TESTO", "qwen3-vl:8b")
+OLLAMA_MODEL_TESTO = os.getenv("OLLAMA_MODEL_TESTO", "qwen3-vl:8b-instruct")
 USA_LLM_SEMANTICO   = os.getenv("USA_LLM_SEMANTICO", "true").lower() == "true"
 
 try:
@@ -69,7 +69,7 @@ FORME_FARMACEUTICHE_VALIDE = {"olio in flacone", "capsule", "cartine"}
 
 # Metodi estrattivi VALIDI — solo nomi propri di metodica, non ingredienti/processi generici
 METODI_ESTRATTIVI_NOTI = {
-    "ramella", "calvi", "sifap", "sicam", "romano", "hazecamp", "hazekamp", "cannazza"
+    "ramella", "calvi", "sifap", "sifo", "sicam", "romano", "hazecamp", "hazekamp", "cannazza"
 }
 
 # Parole che indicano un processo generico ma NON un metodo estrattivo catalogato
@@ -267,11 +267,29 @@ def check_09_deterministico(r: dict) -> bool | None:
 
     # Eccezione: produttore industriale (Tilray/Avextra) non richiede
     # un metodo estrattivo specifico — il farmaco e' gia' pronto/standardizzato.
-    # Confronto fuzzy parola per parola (distanza 2), non solo match esatto —
-    # copre refusi OCR come "Tilary" invece di "Tilray".
-    if forma == "olio in flacone" and _is_empty(metodo):
-        parole_testo = re.findall(r"[a-z]+", testo)
-        for parola in parole_testo:
+    #
+    # Va controllata SEMPRE per formulazioni oleose, indipendentemente dal
+    # fatto che metodo_estrattivo_olio sia vuoto o meno — prima era
+    # condizionata a "campo vuoto": se il modello leggeva QUALSIASI valore
+    # nel campo dedicato (anche "Tilray" scritto giusto, o un refuso tipo
+    # "Tylray"), questo blocco veniva saltato e il controllo proseguiva
+    # fino a "return True" in fondo alla funzione (difformita'), perche'
+    # "tilray"/"avextra" non sono — giustamente — nell'elenco dei metodi
+    # estrattivi veri e propri (sono un marchio di estratto gia' titolato,
+    # categoria concettualmente diversa da Ramella/Calvi/ecc.). Il
+    # fallback semantico (check_09B) non interveniva perche' scatta solo
+    # quando questa funzione restituisce None, non quando restituisce gia'
+    # True in modo definitivo.
+    #
+    # Controlla sia testo_prescrizione SIA il campo dedicato (nel caso
+    # contenga gia' "Tilray"/un refuso, anche se testo_prescrizione per
+    # qualche motivo non lo ripete in modo leggibile). Confronto fuzzy
+    # parola per parola (distanza 2) — copre refusi OCR come "Tilary".
+    if forma == "olio in flacone":
+        parole_da_controllare = re.findall(r"[a-z]+", testo)
+        if not _is_empty(metodo):
+            parole_da_controllare += re.findall(r"[a-z]+", metodo)
+        for parola in parole_da_controllare:
             if len(parola) < 5:
                 continue  # parole troppo corte, rischio di falsi positivi
             if _distanza_levenshtein(parola, "tilray") <= 2 or _distanza_levenshtein(parola, "avextra") <= 2:
@@ -379,14 +397,19 @@ def check_10_deterministico(r: dict) -> bool | None:
         return None
 
     if forma == "olio in flacone":
-        pattern_quantita = re.compile(r"\d+[.,]?\d*\s*(?:thc\s*|cbd\s*)?(?:gtt|gocce|mg)", re.IGNORECASE)
+        # "gr"/"grammi" aggiunto: alcune prescrizioni di flos in olio
+        # indicano la quantità in grammi/die invece che gtt/gocce/mg —
+        # mancava, causava la caduta nella zona ambigua (None) per
+        # testi altrimenti chiari tipo "5 gr die", con conseguente
+        # passaggio non necessario al fallback semantico.
+        pattern_quantita = re.compile(r"\d+[.,]?\d*\s*(?:thc\s*|cbd\s*)?(?:gtt|gocce|mg|gr\.?\b|grammi)", re.IGNORECASE)
         if pattern_quantita.search(testo) and pattern_frequenza.search(testo):
             return False
         return None
 
     # Forma vuota/non riconosciuta: fallback al controllo generico precedente
     pattern_generico = re.compile(
-        r"(\d+\s*(?:gtt|gocce|mg|capsule|cps|cartine|soff))"
+        r"(\d+\s*(?:gtt|gocce|mg|gr\.?\b|grammi|capsule|cps|cartine|soff))"
         r"|(\d+\s*x\s*\d+)"
         r"|(posologia)"
         r"|(\d+\s*mg\s*/\s*die)"

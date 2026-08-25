@@ -1,7 +1,7 @@
 """
 OCR Cannabis ATS Insubria — Pipeline Qwen3-VL
 Autori: Alessandro Marchinu, Francesco Milani
-Versione: 3.1
+Versione: 3.2
 
 Pipeline:
 1. PDF -> immagine ad alta risoluzione
@@ -12,9 +12,10 @@ Pipeline:
 Requisiti:
     pip install pymupdf pillow ollama openpyxl pandas
 
-Modelli richiesti (serve Ollama >= 0.12.7):
-    ollama pull qwen3-vl:8b
-    ollama pull qwen3-vl:30b
+Modelli richiesti (serve Ollama >= 0.12.7) — tag "-instruct", non i tag
+nudi (vedi CHANGELOG v3.2 sul perché):
+    ollama pull qwen3-vl:8b-instruct
+    ollama pull qwen3-vl:30b-a3b-instruct
 
 Override rapido dei modelli senza toccare il codice (PowerShell), utile
 per confrontare A/B con la baseline Qwen2.5-VL:
@@ -24,6 +25,26 @@ Utilizzo:
     python ocr_cannabis.py                    # elabora tutte le ricette in ./ricette/
     python ocr_cannabis.py --input /path/pdf  # cartella personalizzata
     python ocr_cannabis.py --test             # test su prima ricetta trovata
+
+CHANGELOG v3.2:
+    - MODELLO_PESANTE/LEGGERO passati ai tag "-instruct" espliciti
+      (qwen3-vl:30b-a3b-instruct / qwen3-vl:8b-instruct) invece dei tag
+      nudi usati in v3.1 (qwen3-vl:30b / qwen3-vl:8b). I tag nudi hanno
+      il thinking mode disponibile di default, e si è verificato che
+      think=False da solo non lo disabilita sempre in modo affidabile
+      (log reali: migliaia di caratteri di ragionamento generati
+      comunque). I tag "-instruct" sono varianti strutturalmente senza
+      thinking, non un modello pensante convinto a runtime a non
+      pensare — differenza qualitativa, non un trucco di prompt.
+    - Risultato su test A/B diretto (stesse 6 ricette, stessa
+      infrastruttura): 1278s totali contro i 2708s di Qwen2.5-VL (più
+      del doppio più veloce), 6/6 ricette riuscite, zero warning di
+      thinking non rispettato in tutto il log.
+    - think=False e /no_think restano comunque attivi su tutte le
+      chiamate come rete di sicurezza aggiuntiva — non hanno effetto
+      pratico sui tag "-instruct" (nessun thinking da sopprimere), ma
+      non fanno danno e mantengono il codice valido anche tornando ai
+      tag "-thinking" o nudi per un confronto futuro.
 
 CHANGELOG v3.1:
     - Migrazione da Qwen2.5-VL a Qwen3-VL: MODELLO_PESANTE ora qwen3-vl:30b
@@ -77,7 +98,7 @@ LOG_DIR     = BASE_DIR / "logs"
 PERCORSO_REGIONE = None
 _cache_barcode_a_farmacia_id = None  # {barcode: "CO0310 - TILI & C."}, caricata una sola volta
 
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3-vl:30b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3-vl:30b-a3b-instruct")
 _date_corrector = None
 IMAGE_ZOOM   = 3.0
 # ATTENZIONE: num_gpu in Ollama NON è un booleano "usa la GPU sì/no" — è il
@@ -410,6 +431,16 @@ etichetta_data_scadenza:
   date, data_emissione, data_prescrizione) and gets overlooked. If the
   label is present, actively check for it — do not skip it by default.
 
+  BUT — same rule as data_etichetta_preparazione above — "actively
+  check" means searching HARDER for the real anchor, never means
+  substituting a DIFFERENT date as a fallback. Do NOT use
+  data_emissione's "DATA SPEDIZIONE" pharmacy stamp, or
+  data_prescrizione's center "DATA" box, as a stand-in for a missing
+  "UTILIZZARE ENTRO"/"SCAD." value — these are DIFFERENT fields in
+  DIFFERENT areas of the page. If this specific anchor is not found
+  after actively looking, return "" — that is the CORRECT answer, not
+  a failure.
+
   LAYOUT A: field "UTILIZZARE ENTRO [date]" — usually on the same row
   as, or right below, the "Prep. [num] del [date]" field, near the
   price table (S/O/R/U/IV/€ column). Extract the date that follows
@@ -419,7 +450,8 @@ etichetta_data_scadenza:
   LAYOUT B: field "SCAD. [date]" on the PREP row (e.g. "SCAD. DD/MM/YY", format only)
   Format GG/MM/AA -> GG/MM/AAAA.
   Only return "" if the label is genuinely absent or this specific
-  date is not present/readable after actively looking for it.
+  date is not present/readable after actively looking for it — never
+  borrow a real but DIFFERENT date from elsewhere on the page instead.
   =====================================================================
 
 etichetta_avvertenze:
@@ -765,6 +797,16 @@ etichetta_data_scadenza:
   date, data_emissione, data_prescrizione) and gets overlooked. If the
   label is present, actively check for it — do not skip it by default.
 
+  BUT — same rule as data_etichetta_preparazione above — "actively
+  check" means searching HARDER for the real anchor, never means
+  substituting a DIFFERENT date as a fallback. Do NOT use
+  data_emissione's "DATA SPEDIZIONE" pharmacy stamp, or
+  data_prescrizione's center "DATA" box, as a stand-in for a missing
+  "UTILIZZARE ENTRO"/"SCAD." value — these are DIFFERENT fields in
+  DIFFERENT areas of the page. If this specific anchor is not found
+  after actively looking, return "" — that is the CORRECT answer, not
+  a failure.
+
   LAYOUT A: field "UTILIZZARE ENTRO [date]" — usually on the same row
   as, or right below, the "Prep. [num] del [date]" field, near the
   price table (S/O/R/U/IV/€ column). Extract the date that follows
@@ -774,7 +816,8 @@ etichetta_data_scadenza:
   LAYOUT B: field "SCAD. [date]" on the PREP row (e.g. "SCAD. DD/MM/YY", format only)
   Format GG/MM/AA -> GG/MM/AAAA.
   Only return "" if the label is genuinely absent or this specific
-  date is not present/readable after actively looking for it.
+  date is not present/readable after actively looking for it — never
+  borrow a real but DIFFERENT date from elsewhere on the page instead.
   =====================================================================
 
 etichetta_nome_cognome_paziente:
@@ -1036,8 +1079,8 @@ etichetta_nome_cognome_medico:
 # MODELLO_LEGGERO viene sovrascritto a MODELLO_PESANTE se l'utente passa
 # esplicitamente --model da riga di comando (per test A/B con un solo
 # modello uniforme su tutti i gruppi).
-MODELLO_PESANTE = os.getenv("MODELLO_PESANTE", "qwen3-vl:30b")
-MODELLO_LEGGERO = os.getenv("MODELLO_LEGGERO", "qwen3-vl:8b")
+MODELLO_PESANTE = os.getenv("MODELLO_PESANTE", "qwen3-vl:30b-a3b-instruct")
+MODELLO_LEGGERO = os.getenv("MODELLO_LEGGERO", "qwen3-vl:8b-instruct")
 
 GRUPPI_ESTRAZIONE = [
     ("critico", PROMPT_GRUPPO_CRITICO, True, "pesante"),
@@ -1310,17 +1353,27 @@ def sanity_check(dati: dict) -> dict:
             except ValueError:
                 pass
 
-    # Anti-allucinazione prezzi: valori tipici sospetti su Farmacia Comunale
-    if "Comunale" in str(dati.get("nome_farmacia", "")):
-        valori_tipici = {"48.48", "33.74", "5.0", "5.00", "1.53", "8.88", "97.63"}
-        campi_p = ["etichetta_prezzo_sost", "etichetta_prezzo_on",
-                   "etichetta_prezzo_rec", "etichetta_prezzo_iva", "etichetta_prezzo_tot"]
-        sospetti = sum(1 for c in campi_p if str(dati.get(c, "")) in valori_tipici)
-        if sospetti >= 3:
-            log.warning("Prezzi tipici su Farmacia Comunale — probabile allucinazione -> OCR_INCERTO")
-            for c in campi_p:
-                if str(dati.get(c, "")) in valori_tipici:
-                    dati[c] = "OCR_INCERTO"
+    # Anti-allucinazione prezzi: valori tipici sospetti (scritti come
+    # esempio di scala nel prompt, righe sopra) che il modello a volte
+    # ripete parola per parola quando l'etichetta è vuota, invece di
+    # rispettare l'istruzione "CRITICAL ANTI-HALLUCINATION RULE".
+    # Prima limitato a "Farmacia Comunale" (dove il problema era stato
+    # notato la prima volta, layout B con prezzi manoscritti) — ma lo
+    # stesso schema si è osservato anche su Farmacia Tili con
+    # un'etichetta genuinamente assente, quindi non è specifico di una
+    # farmacia o di un layout: si applica sempre.
+    valori_tipici = {"48.48", "33.74", "5.0", "5.00", "1.53", "8.88", "97.63"}
+    campi_p = ["etichetta_prezzo_sost", "etichetta_prezzo_on",
+               "etichetta_prezzo_rec", "etichetta_prezzo_iva", "etichetta_prezzo_tot"]
+    sospetti = sum(1 for c in campi_p if str(dati.get(c, "")) in valori_tipici)
+    if sospetti >= 3:
+        log.warning(
+            f"  Prezzi tipici su '{dati.get('nome_farmacia', '?')}' — "
+            f"probabile allucinazione -> OCR_INCERTO"
+        )
+        for c in campi_p:
+            if str(dati.get(c, "")) in valori_tipici:
+                dati[c] = "OCR_INCERTO"
 
     # THC: estrai solo il numero
     if dati.get("THC"):
@@ -1337,9 +1390,10 @@ def sanity_check(dati: dict) -> dict:
     # è solo il campo dedicato che a volte il modello non compila anche
     # quando il termine è letteralmente presente nel testo.
     METODI_ESTRATTIVI_NOTI_CANON = {
-        "ramella": "Ramella", "calvi": "Calvi", "sifap": "SIFAP",
+        "ramella": "Ramella", "calvi": "Calvi", "sifap": "SIFAP", "sifo": "SIFO",
         "sicam": "SICAM", "romano": "Romano",
         "hazecamp": "Hazecamp", "hazekamp": "Hazekamp", "cannazza": "Cannazza",
+        "tilray": "Tilray", "avextra": "Avextra",
     }
     if _is_empty_campo(dati.get("metodo_estrattivo_olio", "")):
         testo_lower = str(dati.get("testo_prescrizione", "")).lower()
@@ -1372,6 +1426,31 @@ def sanity_check(dati: dict) -> dict:
                         break
                 if trovato:
                     break
+    else:
+        # Il campo NON è vuoto — il modello ha letto qualcosa, ma potrebbe
+        # essere un refuso OCR del nome canonico (es. "Tylray", "Tilroy"
+        # invece di "Tilray") che finora restava così com'è, perché il
+        # blocco sopra scatta solo a campo vuoto. Stessa canonicalizzazione
+        # fuzzy già usata per nome_farmacia/forma_farmaceutica: se il
+        # valore letto è abbastanza vicino a un nome noto, lo riconduciamo
+        # alla forma canonica, altrimenti lo lasciamo invariato (potrebbe
+        # essere un metodo genuinamente diverso, non ancora in elenco).
+        metodo_attuale = str(dati["metodo_estrattivo_olio"]).strip()
+        metodo_attuale_lower = metodo_attuale.lower()
+        if metodo_attuale_lower not in METODI_ESTRATTIVI_NOTI_CANON.values() \
+           and metodo_attuale_lower not in [c.lower() for c in METODI_ESTRATTIVI_NOTI_CANON.values()]:
+            migliore_match, migliore_rapporto = None, None
+            for canonico in set(METODI_ESTRATTIVI_NOTI_CANON.values()):
+                d = _distanza_levenshtein_semplice(metodo_attuale_lower, canonico.lower())
+                rapporto = d / max(len(canonico), 1)
+                if migliore_rapporto is None or rapporto < migliore_rapporto:
+                    migliore_match, migliore_rapporto = canonico, rapporto
+            if migliore_rapporto is not None and migliore_rapporto <= 0.25:
+                log.info(
+                    f"  metodo_estrattivo_olio: '{metodo_attuale}' corretto fuzzy in "
+                    f"'{migliore_match}' (differenza {migliore_rapporto:.0%})"
+                )
+                dati["metodo_estrattivo_olio"] = migliore_match
 
     # Canonicalizzazione fuzzy di nome_farmacia — critica ora che il
     # sistema a profili farmacia (date_corrector.py) dipende da un match

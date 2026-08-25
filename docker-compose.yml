@@ -51,9 +51,9 @@ services:
     command: ["ocr"]
     environment:
       - OLLAMA_HOST=http://ats-ollama:11434
-      - MODELLO_PESANTE=qwen2.5vl:32b
-      - MODELLO_LEGGERO=qwen2.5vl:7b
-      - OLLAMA_MODEL=qwen2.5vl:32b
+      - MODELLO_PESANTE=qwen3-vl:30b-a3b-instruct
+      - MODELLO_LEGGERO=qwen3-vl:8b-instruct
+      - OLLAMA_MODEL=qwen3-vl:30b-a3b-instruct
     volumes:
       - ./dati:/dati
     networks:
@@ -66,7 +66,7 @@ services:
     command: ["difformita"]
     environment:
       - OLLAMA_HOST=http://ats-ollama:11434
-      - OLLAMA_MODEL_TESTO=qwen2.5vl:7b
+      - OLLAMA_MODEL_TESTO=qwen3-vl:8b-instruct
     volumes:
       - ./dati:/dati
     networks:
