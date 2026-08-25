@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block titolo %}Dashboard — ATS Cannabis OCR{% endblock %}
+
+{% block contenuto %}
+<div class="main__header">
+  <div>
+    <h1>Dashboard</h1>
+    <div class="sottotitolo">Cruscotto operativo: cosa sta succedendo ora e panoramica generale</div>
+  </div>
+</div>
+
+<div class="card" id="pannello-in-corso">
+  <h2 class="card__titolo">In corso ora</h2>
+  {% if lotti_attivi_vista %}
+    {% for voce in lotti_attivi_vista %}
+    <div class="job-attivo-riga" data-lotto-id="{{ voce.lotto.id }}">
+      <div class="job-attivo-riga__testa">
+        <a href="/lotti/{{ voce.lotto.id }}" class="job-attivo-riga__nome">{{ voce.lotto.nome }}</a>
+        <span class="job-attivo-riga__fase">{{ voce.etichetta_stato }}{% if voce.elaborazione_attiva %} &middot; {{ voce.elaborazione_attiva.fase.value }}{% endif %}</span>
+      </div>
+      <div class="barra-progresso">
+        <div class="barra-progresso__riempimento" style="width: {{ voce.percentuale }}%;"></div>
+      </div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="stato-vuoto">Nessun lotto in lavorazione al momento. <a href="/lotti/nuovo" style="color: var(--sage); font-weight:600;">Creane uno &rarr;</a></div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2 class="card__titolo">Panoramica generale</h2>
+
+  {% set query_base = [] %}
+  {% if filtro_anno %}{% set _ = query_base.append('anno=' ~ filtro_anno) %}{% endif %}
+  {% if filtro_mese %}{% set _ = query_base.append('mese=' ~ filtro_mese) %}{% endif %}
+  {% set prefisso_query = '/?' ~ (query_base | join('&')) ~ ('&' if query_base else '') %}
+
+  <div class="filtri-pulsanti">
+    <a href="{{ prefisso_query }}" class="filtro-pulsante {{ 'filtro-pulsante--attivo' if not filtro_stato }}">Tutti</a>
+    <a href="{{ prefisso_query }}stato=in_corso" class="filtro-pulsante {{ 'filtro-pulsante--attivo' if filtro_stato == 'in_corso' }}">In corso</a>
+    <a href="{{ prefisso_query }}stato=completato" class="filtro-pulsante {{ 'filtro-pulsante--attivo' if filtro_stato == 'completato' }}">Completati</a>
+    <a href="{{ prefisso_query }}stato=archiviato" class="filtro-pulsante {{ 'filtro-pulsante--attivo' if filtro_stato == 'archiviato' }}">Archiviati</a>
+    <a href="{{ prefisso_query }}stato=eccezione" class="filtro-pulsante filtro-pulsante--allerta {{ 'filtro-pulsante--attivo' if filtro_stato == 'eccezione' }}">Con eccezioni</a>
+  </div>
+
+  <form method="get" action="/" class="filtri-riga filtri-riga--dashboard">
+    <div class="campo campo--filtro">
+      <label>Anno</label>
+      <select name="anno">
+        <option value="">Tutti</option>
+        {% for a in anni_disponibili %}
+        <option value="{{ a }}" {% if a == filtro_anno %}selected{% endif %}>{{ a }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="campo campo--filtro">
+      <label>Mese</label>
+      <select name="mese">
+        <option value="">Tutti</option>
+        {% for m in range(1, 13) %}
+        <option value="{{ m }}" {% if m == filtro_mese %}selected{% endif %}>{{ MESI_IT[m] }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="campo campo--filtro">
+      <label>Stato (specifico)</label>
+      <select name="stato">
+        <option value="">Tutti</option>
+        {% for s in stati_disponibili %}
+        <option value="{{ s.value }}" {% if s.value == filtro_stato %}selected{% endif %}>{{ s.value.replace('_', ' ') }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn btn--secondario">Filtra</button>
+    {% if filtro_anno or filtro_mese or filtro_stato %}
+    <a href="/" class="btn btn--secondario">Azzera</a>
+    {% endif %}
+  </form>
+
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="kpi-card__etichetta">Lotti</div>
+      <div class="kpi-card__valore">{{ lotti_totali }}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-card__etichetta">Prescrizioni elaborate</div>
+      <div class="kpi-card__valore">{{ prescrizioni_totali }}</div>
+    </div>
+    <div class="kpi-card kpi-card--accento">
+      <div class="kpi-card__etichetta">Difformita rilevate</div>
+      <div class="kpi-card__valore">{{ difformita_totali }}</div>
+    </div>
+  </div>
+
+  <h3 style="font-size:14px; margin: 24px 0 12px;">Difformita per codice</h3>
+  {% if difformita_per_codice %}
+    {% for codice, conteggio in difformita_per_codice.items() %}
+    <div class="barra-riga">
+      <div class="barra-riga__etichetta">{{ codice }}</div>
+      <div class="barra-riga__traccia">
+        <div class="barra-riga__riempimento" style="width: {{ (conteggio / max_difformita * 100) | round(0, 'floor') }}%;"></div>
+      </div>
+      <div class="barra-riga__valore">{{ conteggio }}</div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="stato-vuoto">Nessuna difformita nel periodo/filtro selezionato.</div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block script %}
+<script src="/static/js/dashboard-progresso.js"></script>
+{% endblock %}
