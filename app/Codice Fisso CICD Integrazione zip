@@ -1,0 +1,17 @@
+cd "C:\Users\loren\Desktop\Uni\Insubria\ATS\Cannabis\1. Cannabis in Locale\ats-webapp"
+
+git checkout dev
+git pull origin dev
+
+Expand-Archive -Path "$env:USERPROFILE\Downloads\ats-webapp.zip" -DestinationPath "$env:TEMP\ats-dev-update" -Force
+Copy-Item -Path "$env:TEMP\ats-dev-update\ats-webapp\*" -Destination . -Recurse -Force
+
+git status
+git add -A
+git commit -m "Fix loop redirect login, encoding output container, barra di progresso collassata nel log"
+git push origin dev
+
+git checkout test
+git pull origin test
+git merge origin/dev
+git push origin test

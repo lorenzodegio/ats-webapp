@@ -155,6 +155,12 @@ a { color: inherit; text-decoration: none; }
   color: var(--text-primary);
 }
 
+.card__titolo-contatore {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
 /* ---------- KPI grid ---------- */
 .kpi-grid {
   display: grid;
@@ -337,6 +343,11 @@ table.tabella tr:last-child td { border-bottom: none; }
   font-size: 13px;
   margin-bottom: 16px;
 }
+
+.errore-form--lotto { padding: 16px 18px; }
+.errore-form__titolo { font-weight: 700; font-size: 14px; margin-bottom: 8px; }
+.errore-form__corpo { white-space: pre-line; line-height: 1.55; }
+.errore-form__meta { margin-top: 12px; font-size: 11.5px; opacity: .75; }
 
 /* ---------- Login ---------- */
 .login-wrapper {
@@ -632,3 +643,60 @@ table.tabella tr:last-child td { border-bottom: none; }
 .pallino-gravita--bassa { background: var(--sage-light); }
 .pallino-gravita--media { background: var(--terracotta); }
 .pallino-gravita--alta { background: #A2532B; }
+
+/* ---------- Link barcode (link ai PDF prescrizioni) ---------- */
+.link-barcode {
+  color: var(--sage);
+  font-weight: 600;
+  border-bottom: 1px solid transparent;
+  transition: border-color .15s ease;
+}
+.link-barcode:hover { border-bottom-color: var(--sage); }
+.link-barcode__icona { font-size: 11px; margin-left: 3px; opacity: .7; }
+
+/* ---------- Link secondario ---------- */
+.link-secondario {
+  display: inline-block;
+  font-size: 13px;
+  color: var(--sage);
+  margin: 14px 0 4px;
+}
+
+/* ---------- Gruppo lotto (archivio raggruppato) ---------- */
+.gruppo-lotto { padding: 0; overflow: hidden; }
+
+.gruppo-lotto__intestazione {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 24px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-size: 15px;
+  font-weight: 600;
+  transition: background .15s ease;
+}
+.gruppo-lotto__intestazione::-webkit-details-marker { display: none; }
+.gruppo-lotto__intestazione::marker { content: ""; }
+
+.gruppo-lotto__intestazione:hover { background: rgba(107, 144, 128, 0.05); }
+
+.gruppo-lotto__nome { display: flex; align-items: center; gap: 8px; }
+
+.gruppo-lotto__freccia {
+  display: inline-block;
+  color: var(--text-secondary);
+  font-size: 15px;
+  transition: transform .15s ease;
+}
+.gruppo-lotto[open] > .gruppo-lotto__intestazione .gruppo-lotto__freccia,
+.gruppo-lotto[open] .gruppo-lotto__freccia {
+  transform: rotate(90deg);
+}
+
+.gruppo-lotto__corpo {
+  padding: 4px 24px 20px;
+  border-top: 1px solid var(--border-color);
+}

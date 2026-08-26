@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Request, Depends, Form, UploadFile, File, BackgroundTasks
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session, joinedload
 
@@ -17,9 +17,12 @@ from app.auth import get_utente_corrente
 from app.models import (
     LottoMensile, StatoLotto, CaricamentoFile, TipoCaricamento, StatoCaricamento,
     Prescrizione, StatoBarcode, Difformita, StatoDifformita, Elaborazione,
-    StatoElaborazione, Utente,
+    StatoElaborazione, FaseElaborazione, Utente,
 )
-from app.fake_pipeline import avvia_preprocessing_fake, avvia_ocr_fake, avvia_difformita_fake, FAKE_SP_ROOT
+from app.fake_pipeline import (
+    avvia_preprocessing_fake, avvia_ocr_fake, avvia_difformita_fake,
+    FAKE_SP_ROOT, PERCORSO_CARTELLA_OUTPUT_RECENTI,
+)
 from app.real_pipeline import (
     avvia_preprocessing_reale, avvia_ocr_reale, avvia_difformita_reale,
     correggi_barcode_reale, scrivi_excel_finale_reale, esiste_lotto_in_esecuzione,
@@ -254,6 +257,36 @@ def correggi_barcode(
     return RedirectResponse(url=f"/lotti/{lotto_id}#revisione-barcode", status_code=302)
 
 
+@router.get("/lotti/{lotto_id}/prescrizioni/{prescrizione_id}/pdf")
+def visualizza_pdf_prescrizione(
+    lotto_id: str, prescrizione_id: str,
+    db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
+):
+    """
+    Apre nel browser il PDF della singola prescrizione (link cliccabile
+    sul barcode nel dettaglio lotto). Oggi i file vivono nella cartella
+    finta che simula SharePoint (app/fake_pipeline.FAKE_SP_ROOT); quando
+    sara' collegato lo storage reale, solo la risoluzione del percorso
+    qui sotto andra' aggiornata (lettura dal vero SharePoint via
+    Configurazione.sharepoint_base_path) — la route e il link nel
+    template restano identici.
+    """
+    presc = (
+        db.query(Prescrizione)
+        .filter(Prescrizione.id == uuid.UUID(prescrizione_id), Prescrizione.lotto_id == uuid.UUID(lotto_id))
+        .first()
+    )
+    if presc is None or not presc.sp_pdf_path:
+        return JSONResponse({"errore": "Prescrizione o file non trovati"}, status_code=404)
+
+    radice = os.path.normpath(FAKE_SP_ROOT)
+    percorso = os.path.normpath(os.path.join(FAKE_SP_ROOT, presc.sp_pdf_path))
+    if not percorso.startswith(radice + os.sep) or not os.path.isfile(percorso):
+        return JSONResponse({"errore": "File non accessibile"}, status_code=404)
+
+    return FileResponse(percorso, media_type="application/pdf", filename=os.path.basename(percorso))
+
+
 @router.post("/lotti/{lotto_id}/avvia-ocr")
 def avvia_ocr(
     lotto_id: str, background_tasks: BackgroundTasks,
@@ -318,6 +351,35 @@ def completa_lotto(
     return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
 
 
+@router.get("/lotti/{lotto_id}/output-excel")
+def visualizza_output_excel(
+    lotto_id: str, db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
+):
+    """
+    Apre/scarica il foglio di output finale del lotto (bottone "Apri
+    file Excel" nel dettaglio lotto). Stessa cartella fissa per tutti
+    i lotti (PERCORSO_CARTELLA_OUTPUT_RECENTI, vedi fake_pipeline.py) —
+    a differenza dei PDF per prescrizione, qui non c'e' bisogno del
+    fallback "genera al volo" perche' il file nasce sempre insieme al
+    completamento del lotto (completa_lotto chiama genera_excel_output_fake
+    prima di cambiare stato): se manca, il lotto non e' davvero completato.
+    """
+    lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
+    if lotto is None or not lotto.excel_output_filename:
+        return JSONResponse({"errore": "Excel di output non ancora disponibile per questo lotto"}, status_code=404)
+
+    radice = os.path.normpath(FAKE_SP_ROOT)
+    percorso = os.path.normpath(os.path.join(FAKE_SP_ROOT, PERCORSO_CARTELLA_OUTPUT_RECENTI, lotto.excel_output_filename))
+    if not percorso.startswith(radice + os.sep) or not os.path.isfile(percorso):
+        return JSONResponse({"errore": "File Excel non trovato"}, status_code=404)
+
+    return FileResponse(
+        percorso,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=lotto.excel_output_filename
+    )
+
+
 @router.post("/lotti/{lotto_id}/archivia")
 def archivia_lotto(
     lotto_id: str, db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
@@ -379,6 +441,72 @@ def annulla(
             # non viene ripreso: lo riprendo un istante prima di ucciderlo.
             riprendi_container(elaborazione.nome_container)
             annulla_container(elaborazione.nome_container)
+    return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+
+
+@router.post("/lotti/{lotto_id}/riprova")
+def riprova_lotto(
+    lotto_id: str, background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
+):
+    """
+    Rilancia la fase che ha interrotto il lotto (bottone "Riprova" sul
+    banner di eccezione). La fase da riavviare si ricava dall'ultima
+    Elaborazione in stato "errore" per questo lotto — non serve un
+    campo dedicato sul lotto, e' gia' tutto tracciato li'.
+
+    Prima di rilanciare, ripulisce gli eventuali dati parziali scritti
+    dal tentativo fallito (una fase puo' fallire a meta' ciclo, con
+    alcune prescrizioni gia' elaborate e altre no): senza questa
+    pulizia, un retry rischierebbe di creare doppioni.
+    """
+    lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
+    if lotto is None or lotto.stato != StatoLotto.eccezione:
+        return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+
+    ultima_fallita = (
+        db.query(Elaborazione)
+        .filter(Elaborazione.lotto_id == lotto.id, Elaborazione.stato == StatoElaborazione.errore)
+        .order_by(Elaborazione.started_at.desc())
+        .first()
+    )
+    fase = ultima_fallita.fase if ultima_fallita else FaseElaborazione.preprocessing
+
+    lotto.note = None
+
+    if fase == FaseElaborazione.preprocessing:
+        for p in list(lotto.prescrizioni):
+            db.delete(p)
+        lotto.stato = StatoLotto.caricamento
+        lotto.n_prescrizioni_totali = 0
+        lotto.n_barcode_letti = 0
+        lotto.n_barcode_undefined = 0
+        db.commit()
+        background_tasks.add_task(avvia_preprocessing_fake, lotto.id)
+
+    elif fase == FaseElaborazione.vllm:
+        for p in lotto.prescrizioni:
+            if p.dati_ocr:
+                db.delete(p.dati_ocr)
+            p.score_ocr = None
+            p.n_campi_compilati = None
+            p.barcode_in_excel = None
+            p.riga_excel = None
+            p.sp_json_path = None
+        lotto.stato = StatoLotto.revisione_barcode
+        lotto.score_ocr_medio = None
+        lotto.n_match_excel = 0
+        db.commit()
+        background_tasks.add_task(avvia_ocr_fake, lotto.id)
+
+    elif fase == FaseElaborazione.difformita:
+        for d in list(lotto.difformita):
+            db.delete(d)
+        lotto.stato = StatoLotto.revisione_qualita
+        lotto.n_difformita_totali = 0
+        db.commit()
+        background_tasks.add_task(avvia_difformita_fake, lotto.id)
+
     return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
 
 

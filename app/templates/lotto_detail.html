@@ -16,9 +16,13 @@
 </div>
 
 {% if lotto.stato.value == "eccezione" %}
-<div class="errore-form">
-  <strong>Lotto interrotto in eccezione.</strong><br>
-  {{ lotto.note or "Nessun dettaglio disponibile." }}
+<div class="errore-form errore-form--lotto">
+  <div class="errore-form__titolo">⚠ Elaborazione interrotta</div>
+  <div class="errore-form__corpo">{{ lotto.note or "Si è verificato un problema durante l'elaborazione, ma non è stato salvato alcun dettaglio." }}</div>
+  <div class="errore-form__meta">Rilevato il {{ lotto.updated_at.strftime("%d/%m/%Y alle %H:%M") if lotto.updated_at else '—' }}</div>
+  <form method="post" action="/lotti/{{ lotto.id }}/riprova" style="margin-top:14px;">
+    <button type="submit" class="btn btn--primario">Riprova</button>
+  </form>
 </div>
 {% endif %}
 
@@ -91,7 +95,13 @@
       <tbody>
         {% for p in prescrizioni_undefined %}
         <tr>
-          <td class="mono" style="font-size:12px;">{{ p.sp_pdf_path.split('/')[-1] if p.sp_pdf_path else '—' }}</td>
+          <td class="mono" style="font-size:12px;">
+            {% if p.sp_pdf_path %}
+            <a href="/lotti/{{ lotto.id }}/prescrizioni/{{ p.id }}/pdf" target="_blank" rel="noopener" class="link-barcode" title="Apri la prescrizione in una nuova scheda">{{ p.sp_pdf_path.split('/')[-1] }}<span class="link-barcode__icona" aria-hidden="true">↗</span></a>
+            {% else %}
+            —
+            {% endif %}
+          </td>
           <td colspan="2">
             <form method="post" action="/lotti/{{ lotto.id }}/barcode/{{ p.id }}" style="display:flex; gap:8px;">
               <input type="text" name="nuovo_barcode" placeholder="Barcode corretto" required style="flex:1; padding:8px 10px; border:1px solid var(--border-color); border-radius:8px;">
@@ -123,7 +133,13 @@
     <tbody>
       {% for p in lotto.prescrizioni %}
       <tr>
-        <td class="mono">{{ p.barcode or '—' }}</td>
+        <td class="mono">
+          {% if p.barcode %}
+          <a href="/lotti/{{ lotto.id }}/prescrizioni/{{ p.id }}/pdf" target="_blank" rel="noopener" class="link-barcode" title="Apri la prescrizione in una nuova scheda">{{ p.barcode }}<span class="link-barcode__icona" aria-hidden="true">↗</span></a>
+          {% else %}
+          —
+          {% endif %}
+        </td>
         <td>
           {% if p.score_ocr and p.score_ocr < 80 %}
             <span class="badge badge--attesa">{{ p.score_ocr }}</span>
@@ -155,7 +171,13 @@
         <tr>
           <td class="mono">{{ d.codice }}</td>
           <td>{{ d.descrizione }}</td>
-          <td class="mono">{{ d.prescrizione.barcode if d.prescrizione else '—' }}</td>
+          <td class="mono">
+            {% if d.prescrizione and d.prescrizione.barcode %}
+            <a href="/lotti/{{ lotto.id }}/prescrizioni/{{ d.prescrizione.id }}/pdf" target="_blank" rel="noopener" class="link-barcode" title="Apri la prescrizione in una nuova scheda">{{ d.prescrizione.barcode }}<span class="link-barcode__icona" aria-hidden="true">↗</span></a>
+            {% else %}
+            —
+            {% endif %}
+          </td>
           <td style="display:flex; gap:8px;">
             <form method="post" action="/lotti/{{ lotto.id }}/difformita/{{ d.id }}/conferma">
               <button type="submit" class="btn btn--secondario">Conferma</button>
@@ -182,6 +204,9 @@
 <div class="card">
   <h2 class="card__titolo">Lotto completato</h2>
   <p style="font-size:14px;">Tutte le fasi sono concluse. Archivia il lotto per spostarlo in <span class="mono">ARCHIVIO/ELABORAZIONI PASSATE</span>.</p>
+  {% if lotto.excel_output_filename %}
+  <a href="/lotti/{{ lotto.id }}/output-excel" target="_blank" rel="noopener" class="btn btn--primario" style="margin-bottom:12px; display:inline-block;">Apri file Excel</a>
+  {% endif %}
   <form method="post" action="/lotti/{{ lotto.id }}/archivia">
     <button type="submit" class="btn btn--primario">Archivia lotto</button>
   </form>
@@ -203,7 +228,13 @@
     <tbody>
       {% for p in lotto.prescrizioni %}
       <tr>
-        <td class="mono">{{ p.barcode or '—' }}</td>
+        <td class="mono">
+          {% if p.barcode %}
+          <a href="/lotti/{{ lotto.id }}/prescrizioni/{{ p.id }}/pdf" target="_blank" rel="noopener" class="link-barcode" title="Apri la prescrizione in una nuova scheda">{{ p.barcode }}<span class="link-barcode__icona" aria-hidden="true">↗</span></a>
+          {% else %}
+          —
+          {% endif %}
+        </td>
         <td class="mono" style="font-size:12px;">{{ p.stato_barcode.value.replace('_', ' ') }}</td>
         <td>{{ p.score_ocr or '—' }}</td>
         <td>{{ p.difformita | length }}</td>
@@ -227,7 +258,13 @@
         <td class="mono">{{ d.codice }}</td>
         <td>{{ d.descrizione }}</td>
         <td class="mono" style="font-size:12px;">{{ d.stato.value.replace('_', ' ') }}</td>
-        <td class="mono">{{ d.prescrizione.barcode if d.prescrizione else '—' }}</td>
+        <td class="mono">
+          {% if d.prescrizione and d.prescrizione.barcode %}
+          <a href="/lotti/{{ lotto.id }}/prescrizioni/{{ d.prescrizione.id }}/pdf" target="_blank" rel="noopener" class="link-barcode" title="Apri la prescrizione in una nuova scheda">{{ d.prescrizione.barcode }}<span class="link-barcode__icona" aria-hidden="true">↗</span></a>
+          {% else %}
+          —
+          {% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>

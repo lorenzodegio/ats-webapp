@@ -33,6 +33,9 @@ from app.generatore_finto import genera_barcode, genera_dati_ocr_finti, CODICI_D
 
 FAKE_SP_ROOT = "sharepoint_finto"
 
+# Cartella per i file Excel di output generati al completamento lotto
+PERCORSO_CARTELLA_OUTPUT_RECENTI = "ARCHIVIO/ELABORAZIONI RECENTI"
+
 # Probabilita' (0-1) di simulare un'eccezione durante una fase, solo a
 # scopo dimostrativo: nel backend reale l'errore sara' quello vero
 # sollevato dal container Docker corrispondente.
