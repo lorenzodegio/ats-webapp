@@ -28,6 +28,7 @@ vedi docker/run_fase.py.
 
 import json
 import logging
+import os
 import re
 import subprocess
 import time
@@ -52,7 +53,35 @@ PATTERN_PROGRESSO = re.compile(r"\[\d+/\d+\]")
 # eseguito. Senza specificare esplicitamente cwd qui, il comando
 # fallirebbe SEMPRE ("no configuration file provided") non appena
 # lanciato da un server avviato correttamente da app/.
-RADICE_PROGETTO = Path(__file__).parent.parent
+#
+# Containerizzato (HOST_PROJECT_ROOT impostata, vedi docker-compose.yml,
+# servizio "webapp") ci sono DUE percorsi diversi da tenere separati,
+# non uno solo:
+#   1. Dove il file docker-compose.yml è DAVVERO leggibile da QUESTO
+#      container (un percorso Linux normale, es. /workspace — il
+#      client Docker installato qui dentro non sa interpretare un
+#      percorso Windows con backslash come gerarchia di cartelle).
+#      "cwd" sotto usa questo, serve solo a TROVARE e LEGGERE il file
+#      — anche il contesto di build (context: .) si risolve bene
+#      rispetto a questo percorso, perché i file vengono letti e
+#      trasmessi al demone, non richiedono un percorso host reale.
+#   2. Dove il DEMONE Docker (che gira nativo su Docker Desktop, non
+#      dentro questo container) deve risolvere DAVVERO i volumi
+#      relativi (./dati) delle 4 fasi — lì serve il percorso Windows
+#      vero (es. "C:\Users\...\ats-webapp"), perché il demone conosce
+#      solo il filesystem reale dell'host, non quello interno di
+#      questo container. Gestito DIRETTAMENTE nel docker-compose.yml
+#      (i volumi ./dati usano ${HOST_PROJECT_ROOT} con fallback a "."
+#      per l'uso da PowerShell) — non da un flag qui: un tentativo
+#      precedente con --project-directory applicava questo stesso
+#      percorso Windows ANCHE alla risoluzione del contesto di build,
+#      rompendola (un client Linux non riconosce "C:\..." come
+#      assoluto, lo trattava come relativo alla cwd, percorso assurdo).
+MOUNT_INTERNO_CONTAINER = Path("/workspace")
+HOST_PROJECT_ROOT_WINDOWS = os.environ.get("HOST_PROJECT_ROOT")
+
+RADICE_PROGETTO = MOUNT_INTERNO_CONTAINER if HOST_PROJECT_ROOT_WINDOWS \
+    else Path(__file__).parent.parent
 
 # Nomi dei file JSON prodotti dalla pipeline che NON sono singole
 # prescrizioni (riepiloghi aggregati) — da escludere quando si legge
@@ -80,7 +109,24 @@ def _esegui_container(nome_servizio: str, argomenti: list[str], job_id: int = No
     di proseguire alla fase successiva su dati incompleti.
     """
     prefisso = f"[job {job_id}] " if job_id is not None else ""
-    comando = ["docker", "compose", "run", "--rm", nome_servizio, *argomenti]
+    # -p (nome progetto) fisso: senza, Compose lo deriva dal nome della
+    # cartella corrente ("workspace" da dentro questo container, invece
+    # di "ats-webapp" come quando si lancia da PowerShell sull'host) —
+    # con un nome diverso, Compose non riconosce le immagini delle 4
+    # fasi già costruite e prova a ricostruirle ad ogni singolo job.
+    # NIENTE --project-directory qui: sembrava necessario per risolvere
+    # ./dati, ma essendo risolto lato CLIENT con le regole dei percorsi
+    # Linux, un percorso Windows (con la sua doppia probabile ambiguità
+    # di ':' e '\') veniva interpretato come relativo, non assoluto —
+    # rompeva anche la risoluzione del contesto di build (context: .),
+    # che invece funzionava già bene lasciando che si risolvesse
+    # rispetto alla cartella corrente (il progetto vero, montato su
+    # /workspace). Il problema reale riguardava SOLO i volumi ./dati
+    # (che il DEMONE deve risolvere su un percorso host vero, non
+    # quello interno a questo container) — sistemato direttamente nel
+    # docker-compose.yml con un percorso assoluto esplicito per quei
+    # volumi, non qui con un flag che tocca tutto indistintamente.
+    comando = ["docker", "compose", "-p", "ats-webapp", "run", "--rm", nome_servizio, *argomenti]
     log.info(f"{prefisso}Avvio fase: {nome_servizio}")
 
     inizio = time.monotonic()

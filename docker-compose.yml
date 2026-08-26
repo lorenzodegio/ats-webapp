@@ -19,28 +19,64 @@
 # MODELLI: MODELLO_PESANTE/MODELLO_LEGGERO/OLLAMA_MODEL_TESTO impostati
 # esplicitamente qui — le variabili d'ambiente impostate nel terminale
 # host (es. $env:MODELLO_PESANTE) NON si propagano dentro i container,
-# sono processi separati. Senza queste righe, il container userebbe i
-# default scritti nel codice (Qwen3-VL) invece di Qwen2.5-VL, che nei
-# test si è dimostrato più veloce e affidabile sullo stesso hardware.
-# Per cambiare modello, basta modificare i valori qui sotto — non serve
+# sono processi separati. Qwen3-VL con i tag "-instruct" si è
+# dimostrato più del doppio più veloce di Qwen2.5-VL su test A/B diretti
+# (stesse ricette, stessa infrastruttura), senza fughe di thinking mode
+# — coincide ora con i default scritti nel codice, ma resta impostato
+# qui esplicitamente per lo stesso motivo (i container non vedono le
+# env var dell'host). Per cambiare modello, basta modificare i valori
+# qui sotto — non serve
 # toccare il codice Python né ricostruire l'immagine.
 #
 # VOLUMI: tutte e 4 le fasi condividono la stessa cartella ./dati
 # (sul host), che corrisponde a /dati dentro ogni container — così
 # ogni fase trova quello che la fase precedente ha prodotto.
+#
+# SERVIZIO "webapp": il server FastAPI, containerizzato. Richiede
+# HOST_PROJECT_ROOT nel file .env (stesso file già usato per le
+# credenziali Postgres) — il percorso ASSOLUTO di questa cartella
+# COSÌ COME LO VEDE DOCKER DESKTOP, non necessariamente identico a
+# come appare in Esplora File di Windows (con WSL2 spesso serve il
+# percorso tradotto, tipo /run/desktop/mnt/host/c/Users/...). Il
+# progetto viene montato allo STESSO percorso sia su host che dentro
+# il container — necessario perché questo servizio lancia a sua volta
+# le 4 fasi (Docker-fuori-da-Docker, vedi docker/Dockerfile.web) e
+# deve risolvere ./dati rispetto a un percorso reale, non a uno
+# interno del container che non esiste per il demone Docker dell'host.
+# ats-postgres deve già essere avviato a parte (docker-compose.postgres.yml,
+# stesso principio già usato per ats-ollama — non è in questo file).
 
 networks:
   ats-pipeline_default:
     external: true
 
 services:
+  webapp:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+    working_dir: /workspace/app
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST_PROJECT_ROOT=${HOST_PROJECT_ROOT}
+      - POSTGRES_HOST=ats-postgres
+    volumes:
+      - type: bind
+        source: "${HOST_PROJECT_ROOT}"
+        target: /workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - ats-pipeline_default
+
   fase1-preprocessing:
     build:
       context: .
       dockerfile: docker/Dockerfile
     command: ["preprocessing"]
     volumes:
-      - ./dati:/dati
+      - '${HOST_PROJECT_ROOT:-.}\dati:/dati'
     networks:
       - ats-pipeline_default
 
@@ -55,7 +91,7 @@ services:
       - MODELLO_LEGGERO=qwen3-vl:8b-instruct
       - OLLAMA_MODEL=qwen3-vl:30b-a3b-instruct
     volumes:
-      - ./dati:/dati
+      - '${HOST_PROJECT_ROOT:-.}\dati:/dati'
     networks:
       - ats-pipeline_default
 
@@ -68,7 +104,7 @@ services:
       - OLLAMA_HOST=http://ats-ollama:11434
       - OLLAMA_MODEL_TESTO=qwen3-vl:8b-instruct
     volumes:
-      - ./dati:/dati
+      - '${HOST_PROJECT_ROOT:-.}\dati:/dati'
     networks:
       - ats-pipeline_default
 
@@ -78,6 +114,6 @@ services:
       dockerfile: docker/Dockerfile
     command: ["excel"]
     volumes:
-      - ./dati:/dati
+      - '${HOST_PROJECT_ROOT:-.}\dati:/dati'
     networks:
       - ats-pipeline_default
