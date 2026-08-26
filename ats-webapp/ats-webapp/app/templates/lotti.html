@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block titolo %}Lotti recenti — ATS Cannabis OCR{% endblock %}
+
+{% block contenuto %}
+<div class="main__header">
+  <div>
+    <h1>Lotti recenti</h1>
+    <div class="sottotitolo">Gli ultimi {{ numero_recenti }} lotti mensili. Clicca su una riga per aprirne il dettaglio.</div>
+  </div>
+  <a href="/lotti/nuovo" class="btn btn--primario">+ Nuovo lotto</a>
+</div>
+
+<div class="card">
+  {% if lotti %}
+  <table class="tabella" id="tabella-lotti">
+    <thead>
+      <tr>
+        <th>Nome lotto</th>
+        <th>Periodo</th>
+        <th>Stato</th>
+        <th>Prescrizioni</th>
+        <th>Difformita</th>
+        <th>Aggiornato il</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for lotto in lotti %}
+      <tr class="riga-cliccabile" onclick="window.location='/lotti/{{ lotto.id }}'">
+        <td><strong>{{ lotto.nome }}</strong></td>
+        <td class="mono">{{ "%02d"|format(lotto.mese) }}/{{ lotto.anno }}</td>
+        <td>{% include "_badge_stato.html" %}</td>
+        <td>{{ lotto.n_prescrizioni_totali or 0 }}</td>
+        <td>{{ lotto.n_difformita_totali or 0 }}</td>
+        <td>{{ lotto.updated_at.strftime("%d/%m/%Y %H:%M") }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="stato-vuoto">Nessun lotto ancora creato. <a href="/lotti/nuovo" style="color: var(--sage); font-weight:600;">Creane uno &rarr;</a></div>
+  {% endif %}
+</div>
+{% endblock %}
