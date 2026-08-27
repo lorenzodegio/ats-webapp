@@ -1,37 +1,54 @@
 # docker-compose.yml
 # ---------------------
-# Le 4 fasi della pipeline, come da documento di progetto (Sezione 1.2
-# / 2.1), tutte costruite dalla stessa immagine (docker/Dockerfile) —
-# cambia solo il comando eseguito (vedi docker/run_fase.py).
+# Le 4 fasi della pipeline, tutte costruite dalla stessa immagine
+# (docker/Dockerfile) — cambia solo il comando (docker/run_fase.py).
 #
-# NOTA SULL'ORDINE: qui i servizi sono nominati fase1/2/3/4 secondo
-# l'ORDINE DI ESECUZIONE REALE (preprocessing, ocr, difformita, excel)
-# — differisce dal testo del documento (Sezione 1.2), che elenca Excel
-# come fase 03 e Difformità come fase 04. Vedi models.py (StatoJob) e
-# app/pipeline_docker.py per la spiegazione completa del perché.
+# OLLAMA: container "ats-ollama" sulla rete esterna ats-pipeline_default
+# (docker-compose.ollama.yml). I servizi OCR/difformita lo raggiungono
+# come http://ats-ollama:11434.
 #
-# OLLAMA: gira già come container esistente ("ats-ollama", sulla rete
-# "ats-pipeline_default" — verificato con `docker inspect ats-ollama`).
-# I nostri 4 servizi si agganciano alla STESSA rete (dichiarata come
-# "external" qui sotto) per poterlo raggiungere per nome
-# ("http://ats-ollama:11434"), invece di passare da host.docker.internal.
+# MODELLI: MODELLO_PESANTE/MODELLO_LEGGERO/OLLAMA_MODEL_TESTO vanno
+# impostati qui — le env del terminale host NON entrano nei container.
+# Default allineati a Qwen3-VL (test A/B Francesco su macchina ATS).
 #
-# VOLUMI: tutte e 4 le fasi condividono la stessa cartella ./dati
-# (sul host), che corrisponde a /dati dentro ogni container — così
-# ogni fase trova quello che la fase precedente ha prodotto.
+# SERVIZIO "webapp": FastAPI containerizzato (Docker-fuori-da-Docker).
+# Richiede HOST_PROJECT_ROOT nel file .env: percorso ASSOLUTO del
+# progetto come lo vede Docker Desktop (su WSL2 spesso
+# /run/desktop/mnt/host/c/Users/...). Il codice è montato su /workspace
+# e uvicorn usa il package `app` (app.main:app), non il vecchio cwd app/.
+# Postgres (opzionale): docker-compose.postgres.yml, stesso network.
 
 networks:
   ats-pipeline_default:
     external: true
 
 services:
+  webapp:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+    working_dir: /workspace
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST_PROJECT_ROOT=${HOST_PROJECT_ROOT}
+      - POSTGRES_HOST=ats-postgres
+    volumes:
+      - type: bind
+        source: "${HOST_PROJECT_ROOT}"
+        target: /workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - ats-pipeline_default
+
   fase1-preprocessing:
     build:
       context: .
       dockerfile: docker/Dockerfile
     command: ["preprocessing"]
     volumes:
-      - ./dati:/dati
+      - ${HOST_PROJECT_ROOT:-.}/dati:/dati
     networks:
       - ats-pipeline_default
 
@@ -42,8 +59,11 @@ services:
     command: ["ocr"]
     environment:
       - OLLAMA_HOST=http://ats-ollama:11434
+      - MODELLO_PESANTE=qwen3-vl:30b-a3b-instruct
+      - MODELLO_LEGGERO=qwen3-vl:8b-instruct
+      - OLLAMA_MODEL=qwen3-vl:30b-a3b-instruct
     volumes:
-      - ./dati:/dati
+      - ${HOST_PROJECT_ROOT:-.}/dati:/dati
     networks:
       - ats-pipeline_default
 
@@ -54,8 +74,9 @@ services:
     command: ["difformita"]
     environment:
       - OLLAMA_HOST=http://ats-ollama:11434
+      - OLLAMA_MODEL_TESTO=qwen3-vl:8b-instruct
     volumes:
-      - ./dati:/dati
+      - ${HOST_PROJECT_ROOT:-.}/dati:/dati
     networks:
       - ats-pipeline_default
 
@@ -65,6 +86,6 @@ services:
       dockerfile: docker/Dockerfile
     command: ["excel"]
     volumes:
-      - ./dati:/dati
+      - ${HOST_PROJECT_ROOT:-.}/dati:/dati
     networks:
       - ats-pipeline_default

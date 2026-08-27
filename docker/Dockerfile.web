@@ -1,0 +1,50 @@
+# docker/Dockerfile.web
+# -----------------------
+# Immagine per il server FastAPI (app/main.py) — separata da
+# docker/Dockerfile (quello delle 4 fasi pipeline) perché ha bisogno
+# di cose diverse: qui NON servono torch/easyocr/ollama (il server non
+# fa OCR direttamente, orchestra solo i container che lo fanno), ma
+# serve il client Docker CLI, che le 4 fasi non usano mai.
+#
+# "Docker fuori da Docker": questo container lancia ALTRI container
+# (le 4 fasi pipeline) montando il socket Docker dell'host
+# (/var/run/docker.sock, vedi docker-compose.yml) — serve il binario
+# `docker` qui dentro per poterlo fare, anche se il *demone* Docker
+# resta quello dell'host, non uno annidato.
+#
+# NIENTE COPY del codice applicativo qui dentro: app/ viene montato a
+# runtime (vedi docker-compose.yml, servizio "webapp") su /workspace,
+# stesso percorso Linux sia in build che in esecuzione. Il comando
+# "docker compose run" per le 4 fasi, eseguito da QUI DENTRO, deve
+# trovare davvero docker-compose.yml — cosa che il client Docker fa
+# guardando il proprio filesystem locale (quello di QUESTO
+# container). Per la risoluzione dei volumi relativi (./dati) verso
+# l'host reale si usa --project-directory con il percorso Windows
+# vero (vedi app/pipeline_docker.py), non questo percorso interno.
+
+FROM python:3.11-slim
+
+# Installazione ufficiale del client Docker (CLI) + plugin compose,
+# dal repository apt di Docker — non il pacchetto generico "docker.io"
+# di Debian (primo tentativo: il binario non finiva in un posto
+# affidabile) né COPY --from un'altra immagine (secondo tentativo: il
+# percorso interno del plugin compose varia da build a build, non
+# stabile su cui contare). Questo è il metodo che Docker stesso
+# documenta per installare SOLO il client (non il demone) su sistemi
+# Debian/Ubuntu — piazza tutto nei percorsi standard tramite apt,
+# niente da indovinare.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl gnupg \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+    && chmod a+r /etc/apt/keyrings/docker.asc \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+       > /etc/apt/sources.list.d/docker.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt --break-system-packages
+
+EXPOSE 8000

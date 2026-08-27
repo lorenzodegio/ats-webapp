@@ -11,3 +11,5 @@ dati/
 .DS_Store
 ats-webapp.zip
 Codice Fisso CICD Integrazione zip
+postgres-dati/
+ollama-dati/

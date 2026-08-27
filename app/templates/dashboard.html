@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block titolo %}Dashboard — ATS Cannabis OCR{% endblock %}
+{% block titolo %}Dashboard — ATS Gestione Prescrizioni Cannabis{% endblock %}
 
 {% block contenuto %}
 <div class="main__header">
@@ -16,7 +16,7 @@
     <div class="job-attivo-riga" data-lotto-id="{{ voce.lotto.id }}">
       <div class="job-attivo-riga__testa">
         <a href="/lotti/{{ voce.lotto.id }}" class="job-attivo-riga__nome">{{ voce.lotto.nome }}</a>
-        <span class="job-attivo-riga__fase" id="fase-{{ voce.lotto.id }}">{{ voce.etichetta_stato }}{% if voce.elaborazione_attiva %} &middot; {{ voce.elaborazione_attiva.fase.value }}{% endif %}</span>
+        <span class="job-attivo-riga__fase" id="fase-{{ voce.lotto.id }}">{{ voce.etichetta_stato }}{% if voce.messaggio_operatore %} · {{ voce.messaggio_operatore }}{% endif %}</span>
       </div>
       <div class="barra-progresso-riga">
         <div class="barra-progresso">

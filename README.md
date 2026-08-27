@@ -1,4 +1,4 @@
-# ATS Cannabis OCR — Pipeline Manager (Web App)
+# ATS Gestione Prescrizioni Cannabis
 
 Applicazione web interna per la gestione delle prescrizioni di cannabis
 terapeutica, sviluppata in collaborazione con ATS Insubria.

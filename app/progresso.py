@@ -81,3 +81,20 @@ def percentuale_avanzamento(stato: StatoLotto) -> int:
 
 def etichetta_stato(stato: StatoLotto) -> str:
     return ETICHETTE_STATO.get(stato, stato.value if hasattr(stato, "value") else str(stato))
+
+
+MESSAGGI_FASE_OPERATORE = {
+    "preprocessing": "Sto preparando i file delle prescrizioni.",
+    "vllm": "Sto leggendo automaticamente le prescrizioni.",
+    "difformita": "Sto analizzando le difformità.",
+    "completa": "Sto preparando i file di output.",
+}
+
+
+def messaggio_fase_operatore(fase, in_pausa=False) -> str:
+    if in_pausa:
+        return "Elaborazione in pausa. Puoi riprendere quando sei pronto."
+    if fase is None:
+        return "Elaborazione in corso."
+    chiave = fase.value if hasattr(fase, "value") else str(fase)
+    return MESSAGGI_FASE_OPERATORE.get(chiave, "Elaborazione in corso.")

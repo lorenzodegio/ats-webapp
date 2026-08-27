@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block titolo %}{{ lotto.nome }} — ATS Cannabis OCR{% endblock %}
+{% block titolo %}{{ lotto.nome }} — ATS Gestione Prescrizioni Cannabis{% endblock %}
 
 {% block contenuto %}
 <div class="main__header">
@@ -46,7 +46,7 @@
 {% if elaborazione_attiva %}
 <div class="card" data-lotto-id="{{ lotto.id }}" id="pannello-avanzamento-dettaglio">
   <div class="pannello-avanzamento__testa">
-    <h2 class="card__titolo" style="margin-bottom:0;">Elaborazione in corso &middot; {{ elaborazione_attiva.fase.value }}</h2>
+    <h2 class="card__titolo" style="margin-bottom:0;">Elaborazione in corso</h2>
     <div class="controlli-elaborazione" id="controlli-elaborazione">
       <form method="post" action="/lotti/{{ lotto.id }}/elaborazione/pausa" id="form-pausa" style="display:{{ 'none' if in_pausa else 'inline' }};">
         <button type="submit" class="btn btn--secondario">Metti in pausa</button>
@@ -72,10 +72,14 @@
   <div class="progresso-item" id="progresso-item-dettaglio">
     {% if progresso_item %}{{ progresso_item.attuale }} di {{ progresso_item.totale }} prescrizioni{% endif %}
   </div>
-  <div class="console-log" id="console-log">
-    {% for riga in log_recenti %}
-    <div class="console-log__riga console-log__riga--{{ riga.livello.value }}">{{ riga.timestamp.strftime("%H:%M:%S") }} &middot; {{ riga.messaggio }}</div>
-    {% endfor %}
+  <div class="stato-macchina{% if in_pausa %} stato-macchina--pausa{% endif %}" id="stato-macchina">
+    <div class="stato-macchina__pulse" aria-hidden="true">
+      <span></span><span></span><span></span>
+    </div>
+    <p class="stato-macchina__titolo" id="stato-macchina-titolo">
+      {% if in_pausa %}In pausa{% else %}Lavorazione automatica{% endif %}
+    </p>
+    <p class="stato-macchina__messaggio" id="stato-macchina-messaggio">{{ messaggio_operatore }}</p>
   </div>
 </div>
 {% endif %}

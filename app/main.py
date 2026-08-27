@@ -2,6 +2,9 @@
 Entry point FastAPI: sessione, routing, mount static.
 Avvio: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 """
+from dotenv import load_dotenv
+load_dotenv()
+
 import os
 
 from fastapi import FastAPI, Request
@@ -16,7 +19,7 @@ from app.routers import auth_router, dashboard, lotti, archivio, impostazioni
 # Crea le tabelle se non esistono (per dev; in produzione si userebbe Alembic)
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="ATS Cannabis OCR — Pipeline Manager")
+app = FastAPI(title="ATS Gestione Prescrizioni Cannabis")
 
 SECRET_KEY = os.environ.get("SESSION_SECRET_KEY", "cambia-questa-chiave-in-produzione")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax")

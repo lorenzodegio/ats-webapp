@@ -1,24 +1,64 @@
 """
-OCR Cannabis ATS Insubria — Pipeline Qwen2.5-VL
+OCR Cannabis ATS Insubria — Pipeline Qwen3-VL
 Autori: Alessandro Marchinu, Francesco Milani
-Versione: 3.0
+Versione: 3.2
 
 Pipeline:
 1. PDF -> immagine ad alta risoluzione
-2. Qwen2.5-VL -> estrazione dati in JSON
+2. Qwen3-VL -> estrazione dati in JSON
 3. Sanity check e normalizzazione
 4. Output JSON compatibile con Phase 4 del tutor
 
 Requisiti:
     pip install pymupdf pillow ollama openpyxl pandas
 
-Modello richiesto:
-    ollama pull qwen2.5vl:7b
+Modelli richiesti (serve Ollama >= 0.12.7) — tag "-instruct", non i tag
+nudi (vedi CHANGELOG v3.2 sul perché):
+    ollama pull qwen3-vl:8b-instruct
+    ollama pull qwen3-vl:30b-a3b-instruct
+
+Override rapido dei modelli senza toccare il codice (PowerShell), utile
+per confrontare A/B con la baseline Qwen2.5-VL:
+    $env:MODELLO_PESANTE="qwen2.5vl:32b"; $env:MODELLO_LEGGERO="qwen2.5vl:7b"
 
 Utilizzo:
     python ocr_cannabis.py                    # elabora tutte le ricette in ./ricette/
     python ocr_cannabis.py --input /path/pdf  # cartella personalizzata
     python ocr_cannabis.py --test             # test su prima ricetta trovata
+
+CHANGELOG v3.2:
+    - MODELLO_PESANTE/LEGGERO passati ai tag "-instruct" espliciti
+      (qwen3-vl:30b-a3b-instruct / qwen3-vl:8b-instruct) invece dei tag
+      nudi usati in v3.1 (qwen3-vl:30b / qwen3-vl:8b). I tag nudi hanno
+      il thinking mode disponibile di default, e si è verificato che
+      think=False da solo non lo disabilita sempre in modo affidabile
+      (log reali: migliaia di caratteri di ragionamento generati
+      comunque). I tag "-instruct" sono varianti strutturalmente senza
+      thinking, non un modello pensante convinto a runtime a non
+      pensare — differenza qualitativa, non un trucco di prompt.
+    - Risultato su test A/B diretto (stesse 6 ricette, stessa
+      infrastruttura): 1278s totali contro i 2708s di Qwen2.5-VL (più
+      del doppio più veloce), 6/6 ricette riuscite, zero warning di
+      thinking non rispettato in tutto il log.
+    - think=False e /no_think restano comunque attivi su tutte le
+      chiamate come rete di sicurezza aggiuntiva — non hanno effetto
+      pratico sui tag "-instruct" (nessun thinking da sopprimere), ma
+      non fanno danno e mantengono il codice valido anche tornando ai
+      tag "-thinking" o nudi per un confronto futuro.
+
+CHANGELOG v3.1:
+    - Migrazione da Qwen2.5-VL a Qwen3-VL: MODELLO_PESANTE ora qwen3-vl:30b
+      (MoE, ~3B parametri attivi per token — molto più veloce su GPU 16GB
+      anche quando non entra tutto in VRAM, perché la CPU calcola solo la
+      parte attiva), MODELLO_LEGGERO ora qwen3-vl:8b (denso, entra intero
+      in VRAM con margine)
+    - think=False esplicito su tutte le chiamate Ollama: Qwen3-VL supporta
+      il thinking mode, che va disabilitato per non rallentare le risposte
+      e non rischiare di rompere il parsing JSON con testo di ragionamento
+    - pulisci_json() ora rimuove anche eventuali blocchi <think> residui
+    - get_date_corrector() ora riusa MODELLO_PESANTE invece di un valore
+      hardcoded separato (erano due stringhe indipendenti che potevano
+      disallinearsi)
 
 CHANGELOG v3.0:
     - Fix data_emissione: ricerca ristretta al solo timbro DATA SPEDIZIONE,
@@ -32,6 +72,7 @@ import fitz
 import base64
 import json
 import re
+import os
 import sys
 import argparse
 import logging
@@ -57,11 +98,50 @@ LOG_DIR     = BASE_DIR / "logs"
 PERCORSO_REGIONE = None
 _cache_barcode_a_farmacia_id = None  # {barcode: "CO0310 - TILI & C."}, caricata una sola volta
 
-OLLAMA_MODEL = "qwen2.5vl:32b"
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3-vl:30b-a3b-instruct")
 _date_corrector = None
 IMAGE_ZOOM   = 3.0
-NUM_GPU      = 1
+# ATTENZIONE: num_gpu in Ollama NON è un booleano "usa la GPU sì/no" — è il
+# NUMERO DI LAYER del modello da caricare sulla GPU.
+#
+# Storia di questo parametro (per non ripetere gli stessi tentativi):
+#   1. NUM_GPU=1 (default originale) -> caricava un solo layer su GPU,
+#      tutto il resto su CPU. Causa quasi certa delle "decine di minuti
+#      per ricetta" storiche.
+#   2. NUM_GPU=99 (primo tentativo di fix) -> peggio ancora: con un
+#      modello da 20GB su una GPU da 16GB, forzare "quanti più layer
+#      entrano" ha spinto Ollama a tentare un caricamento quasi completo
+#      in VRAM, sforando nella "shared GPU memory" di Windows (RAM di
+#      sistema usata come estensione via PCIe) — verificato con `ollama
+#      ps` che mostrava "100% GPU" (impossibile per davvero con un
+#      modello più grande della VRAM), risultato PEGGIORE del CPU
+#      fallback pulito.
+#   3. None (attuale) -> NON si passa affatto num_gpu nella chiamata,
+#      lasciando che sia Ollama a decidere in autonomia in base alla
+#      VRAM realmente disponibile. È la configurazione con cui abbiamo
+#      ottenuto il test isolato riuscito (31s, ~54 tok/s, split
+#      automatico ~70/30 GPU/CPU).
+#
+# Per un vero override esplicito da riga di comando: --gpu 0 forza CPU-only
+# (utile solo per confronto/debug), qualunque numero positivo forza quel
+# tetto di layer (sconsigliato per modelli più grandi della VRAM, vedi sopra).
+NUM_GPU      = None
 NUM_CTX      = 16384
+
+# Rete di sicurezza aggiuntiva contro il thinking mode di Qwen3-VL, che
+# abbiamo verificato NON essere sempre rispettato dal solo parametro API
+# think=False (log reale: 3229 caratteri di ragionamento generati comunque
+# nonostante think=False). "/no_think" è un'istruzione di controllo che il
+# modello riconosce a livello di chat template — indipendente da eventuali
+# bug della libreria ollama-python, quindi più affidabile. Va nel testo
+# del messaggio, non nelle options.
+#
+# È una convenzione specifica della famiglia Qwen3 (non esiste "thinking
+# mode" su Qwen2.5): va aggiunta SOLO se il modello in uso è Qwen3,
+# altrimenti su Qwen2.5 sarebbe testo estraneo nel prompt senza alcun
+# significato per il modello, rischiando solo di confonderlo inutilmente.
+def suffisso_no_think(modello: str) -> str:
+    return "\n\n/no_think" if "qwen3" in modello.lower() else ""
 
 # Template per il rilevamento automatico presenza/assenza etichetta (crop del
 # modulo CODICE/NUMERO vuoto, generato dalla stessa pipeline zoom-3x — vedi
@@ -358,6 +438,16 @@ etichetta_data_scadenza:
   date, data_emissione, data_prescrizione) and gets overlooked. If the
   label is present, actively check for it — do not skip it by default.
 
+  BUT — same rule as data_etichetta_preparazione above — "actively
+  check" means searching HARDER for the real anchor, never means
+  substituting a DIFFERENT date as a fallback. Do NOT use
+  data_emissione's "DATA SPEDIZIONE" pharmacy stamp, or
+  data_prescrizione's center "DATA" box, as a stand-in for a missing
+  "UTILIZZARE ENTRO"/"SCAD." value — these are DIFFERENT fields in
+  DIFFERENT areas of the page. If this specific anchor is not found
+  after actively looking, return "" — that is the CORRECT answer, not
+  a failure.
+
   LAYOUT A: field "UTILIZZARE ENTRO [date]" — usually on the same row
   as, or right below, the "Prep. [num] del [date]" field, near the
   price table (S/O/R/U/IV/€ column). Extract the date that follows
@@ -367,7 +457,8 @@ etichetta_data_scadenza:
   LAYOUT B: field "SCAD. [date]" on the PREP row (e.g. "SCAD. DD/MM/YY", format only)
   Format GG/MM/AA -> GG/MM/AAAA.
   Only return "" if the label is genuinely absent or this specific
-  date is not present/readable after actively looking for it.
+  date is not present/readable after actively looking for it — never
+  borrow a real but DIFFERENT date from elsewhere on the page instead.
   =====================================================================
 
 etichetta_avvertenze:
@@ -477,27 +568,7 @@ THC:
 
 nome_farmacia:
   Source: pharmacy stamp bottom right or pharmacy label header.
-  Map to closest from this list:
-    Farmacia Tili Snc
-    Farmacia Di Lora Srl
-    Farmacia Pomi di dr. Collivasone A. & C. Snc
-    Farmacia Ramella dott.ri G. e A. Sas
-    Farmacia Mazzucchelli F. & C. Snc
-    Farmacia Peroni dr Antonio E. & C. Sas
-    Farmacia Comunale N.2
-    Farmacia Stefini & C Sas
-    Farmacia Introini dr. Paolo & C. Sas
-    Farmacia Di Crenna
-    Farmacia Ponti
-  Specific corrections:
-    "FARMACIA POMI SNC DI AVIGNO" or "FARMACIA DI AVIGNO" -> "Farmacia Pomi di dr. Collivasone A. & C. Snc"
-    "FARMACIA RAMELLA" -> "Farmacia Ramella dott.ri G. e A. Sas"
-    "FARMACIA INTROINI" -> "Farmacia Introini dr. Paolo & C. Sas"
-    "FARMACIA MAZZUCCHELLI" -> "Farmacia Mazzucchelli F. & C. Snc"
-    "FARMACIA PERONI" -> "Farmacia Peroni dr Antonio E. & C. Sas"
-    "Farmacia Comunale 2" or "FARMACIA COMUNALE 2" or "M.S. SpA - Farmacia Comunale" -> "Farmacia Comunale N.2"
-    "FARMACIA PILI" or "FARMACIA MILI" -> "Farmacia Tili Snc"
-  Not mappable -> return name as read. Not present -> "FARMACIA NON RICONOSCIUTA"
+__ELENCO_FARMACIE__
 
 {
   "nome_cognome_assistito": "",
@@ -713,6 +784,16 @@ etichetta_data_scadenza:
   date, data_emissione, data_prescrizione) and gets overlooked. If the
   label is present, actively check for it — do not skip it by default.
 
+  BUT — same rule as data_etichetta_preparazione above — "actively
+  check" means searching HARDER for the real anchor, never means
+  substituting a DIFFERENT date as a fallback. Do NOT use
+  data_emissione's "DATA SPEDIZIONE" pharmacy stamp, or
+  data_prescrizione's center "DATA" box, as a stand-in for a missing
+  "UTILIZZARE ENTRO"/"SCAD." value — these are DIFFERENT fields in
+  DIFFERENT areas of the page. If this specific anchor is not found
+  after actively looking, return "" — that is the CORRECT answer, not
+  a failure.
+
   LAYOUT A: field "UTILIZZARE ENTRO [date]" — usually on the same row
   as, or right below, the "Prep. [num] del [date]" field, near the
   price table (S/O/R/U/IV/€ column). Extract the date that follows
@@ -722,7 +803,8 @@ etichetta_data_scadenza:
   LAYOUT B: field "SCAD. [date]" on the PREP row (e.g. "SCAD. DD/MM/YY", format only)
   Format GG/MM/AA -> GG/MM/AAAA.
   Only return "" if the label is genuinely absent or this specific
-  date is not present/readable after actively looking for it.
+  date is not present/readable after actively looking for it — never
+  borrow a real but DIFFERENT date from elsewhere on the page instead.
   =====================================================================
 
 etichetta_nome_cognome_paziente:
@@ -964,54 +1046,67 @@ etichetta_nome_cognome_medico:
 # MODELLO_LEGGERO viene sovrascritto a MODELLO_PESANTE se l'utente passa
 # esplicitamente --model da riga di comando (per test A/B con un solo
 # modello uniforme su tutti i gruppi).
-MODELLO_PESANTE = "qwen2.5vl:32b"
-MODELLO_LEGGERO = "qwen2.5vl:7b"
+MODELLO_PESANTE = os.getenv("MODELLO_PESANTE", "qwen3-vl:30b-a3b-instruct")
+MODELLO_LEGGERO = os.getenv("MODELLO_LEGGERO", "qwen3-vl:8b-instruct")
 MARCATORE_ELENCO_FARMACIE = "__ELENCO_FARMACIE__"
 
 
-def _prompt_resto_con_farmacie():
+def _blocco_elenco_farmacie():
     if FARMACIE_DIZIONARIO_DISPONIBILE:
-        blocco = farmacie_dizionario.blocco_prompt_farmacie()
-    else:
-        blocco = (
-            "  Map to closest from this list:\n"
-            "    Farmacia Tili Snc\n"
-            "    Farmacia Di Lora Srl\n"
-            "    Farmacia Pomi di dr. Collivasone A. & C. Snc\n"
-            "    Farmacia Ramella dott.ri G. e A. Sas\n"
-            "    Farmacia Mazzucchelli F. & C. Snc\n"
-            "    Farmacia Peroni dr Antonio E. & C. Sas\n"
-            "    Farmacia Comunale N.2\n"
-            "    Farmacia Stefini & C Sas\n"
-            "    Farmacia Introini dr. Paolo & C. Sas\n"
-            "    Farmacia Di Crenna\n"
-            "    Farmacia Ponti\n"
-            "  Not mappable -> return name as read. Not present -> \"FARMACIA NON RICONOSCIUTA\""
-        )
-    return PROMPT_GRUPPO_RESTO.replace(MARCATORE_ELENCO_FARMACIE, blocco)
+        return farmacie_dizionario.blocco_prompt_farmacie()
+    return (
+        "  Map to closest from this list:\n"
+        "    Farmacia Tili Snc\n"
+        "    Farmacia Di Lora Srl\n"
+        "    Farmacia Pomi di dr. Collivasone A. & C. Snc\n"
+        "    Farmacia Ramella dott.ri G. e A. Sas\n"
+        "    Farmacia Mazzucchelli F. & C. Snc\n"
+        "    Farmacia Peroni dr Antonio E. & C. Sas\n"
+        "    Farmacia Comunale N.2\n"
+        "    Farmacia Stefini & C Sas\n"
+        "    Farmacia Introini dr. Paolo & C. Sas\n"
+        "    Farmacia Di Crenna\n"
+        "    Farmacia Ponti\n"
+        "  Not mappable -> return name as read. Not present -> \"FARMACIA NON RICONOSCIUTA\""
+    )
 
 
-def gruppi_estrazione():
-    return [
-        ("critico", PROMPT_GRUPPO_CRITICO, True, "pesante"),
-        ("resto", _prompt_resto_con_farmacie(), True, "leggero"),
-    ]
+def _prompt_resto_con_farmacie():
+    return PROMPT_GRUPPO_RESTO.replace(MARCATORE_ELENCO_FARMACIE, _blocco_elenco_farmacie())
 
 
-# Due gruppi organizzati per CRITICITA' (non per argomento tematico): il
-# gruppo CRITICO raccoglie i campi dove i test hanno mostrato più errori
-# (CF, esenzione, tutte le date, tutti i prezzi) e usa il modello pesante;
-# il RESTO usa il modello leggero. Solo 2 chiamate = un solo cambio di
-# modello, minimizzando il costo di caricamento/scaricamento tra i due.
-# MODELLO_LEGGERO viene sovrascritto a MODELLO_PESANTE se l'utente passa
-# esplicitamente --model da riga di comando (per test A/B con un solo
-# modello uniforme su tutti i gruppi).
 GRUPPI_ESTRAZIONE = [
     ("critico", PROMPT_GRUPPO_CRITICO, True, "pesante"),
-    ("resto", PROMPT_GRUPPO_RESTO, True, "leggero"),
+    ("resto", _prompt_resto_con_farmacie(), True, "leggero"),
 ]
 
 # ─── Funzioni core ─────────────────────────────────────────────────────────────
+
+_modello_attivo = None
+
+
+def _prepara_modello(modello: str):
+    """Assicura che SOLO `modello` sia caricato in Ollama, scaricando
+    esplicitamente il precedente se diverso.
+
+    Perché serve: Ollama tiene un modello in memoria per keep_alive
+    (default 5 minuti) anche dopo l'ultima chiamata. Passando da
+    MODELLO_PESANTE a MODELLO_LEGGERO (e viceversa, per le correzioni di
+    date_corrector.py) a distanza di pochi secondi, senza questo
+    accorgimento i due modelli restano ENTRAMBI caricati insieme e
+    competono per la stessa VRAM — verificato con `ollama ps`: con
+    entrambi caricati lo split GPU crollava a 97%/3% e 90%/10% CPU/GPU
+    (quasi tutto su CPU per entrambi), nonostante num_gpu al massimo.
+    """
+    global _modello_attivo
+    if _modello_attivo is not None and _modello_attivo != modello:
+        try:
+            ollama.generate(model=_modello_attivo, keep_alive=0)
+            log.info(f"  Scaricato {_modello_attivo} per liberare VRAM prima di caricare {modello}")
+        except Exception as e:
+            log.warning(f"  Impossibile scaricare {_modello_attivo} (proseguo comunque): {e}")
+    _modello_attivo = modello
+
 
 def get_template_etichetta():
     """Carica (una sola volta) il template del modulo CODICE/NUMERO vuoto."""
@@ -1038,7 +1133,11 @@ def get_easyocr_reader():
         try:
             import easyocr
             log.info("Caricamento EasyOCR (fallback rilevamento etichetta)...")
-            _easyocr_reader = easyocr.Reader(["it"], gpu=(NUM_GPU == 1))
+            # NUM_GPU ora è: None=lascia decidere Ollama (default), 0=forza CPU,
+            # N=forza N layer su GPU. Per EasyOCR (parametro gpu davvero
+            # booleano) None e qualunque valore positivo intendono "usa la
+            # GPU"; solo 0 esplicito significa "no".
+            _easyocr_reader = easyocr.Reader(["it"], gpu=(NUM_GPU is None or NUM_GPU > 0))
         except Exception as e:
             log.warning(f"EasyOCR non disponibile, fallback disabilitato: {e}")
             _easyocr_reader = False  # sentinella: non ritentare ad ogni ricetta
@@ -1080,8 +1179,17 @@ def pdf_to_base64(pdf_path: Path) -> str:
 
 
 def pulisci_json(testo: str) -> str:
-    """Estrae blocco JSON dalla risposta del modello."""
+    """Estrae blocco JSON dalla risposta del modello.
+
+    Rimuove anche un eventuale blocco <think>...</think> residuo — con
+    think=False non dovrebbe comparire, ma non tutte le combinazioni di
+    versione ollama/ollama-python lo rispettano in modo affidabile, quindi
+    meglio ripulire comunque prima di cercare le graffe: se il ragionamento
+    del modello contenesse per caso una graffa, la regex sotto potrebbe
+    prendere il pezzo sbagliato.
+    """
     testo = testo.strip()
+    testo = re.sub(r'<think>[\s\S]*?</think>', '', testo, flags=re.IGNORECASE).strip()
     match = re.search(r'\{[\s\S]*\}', testo)
     return match.group(0).strip() if match else testo
 
@@ -1238,17 +1346,27 @@ def sanity_check(dati: dict) -> dict:
             except ValueError:
                 pass
 
-    # Anti-allucinazione prezzi: valori tipici sospetti su Farmacia Comunale
-    if "Comunale" in str(dati.get("nome_farmacia", "")):
-        valori_tipici = {"48.48", "33.74", "5.0", "5.00", "1.53", "8.88", "97.63"}
-        campi_p = ["etichetta_prezzo_sost", "etichetta_prezzo_on",
-                   "etichetta_prezzo_rec", "etichetta_prezzo_iva", "etichetta_prezzo_tot"]
-        sospetti = sum(1 for c in campi_p if str(dati.get(c, "")) in valori_tipici)
-        if sospetti >= 3:
-            log.warning("Prezzi tipici su Farmacia Comunale — probabile allucinazione -> OCR_INCERTO")
-            for c in campi_p:
-                if str(dati.get(c, "")) in valori_tipici:
-                    dati[c] = "OCR_INCERTO"
+    # Anti-allucinazione prezzi: valori tipici sospetti (scritti come
+    # esempio di scala nel prompt, righe sopra) che il modello a volte
+    # ripete parola per parola quando l'etichetta è vuota, invece di
+    # rispettare l'istruzione "CRITICAL ANTI-HALLUCINATION RULE".
+    # Prima limitato a "Farmacia Comunale" (dove il problema era stato
+    # notato la prima volta, layout B con prezzi manoscritti) — ma lo
+    # stesso schema si è osservato anche su Farmacia Tili con
+    # un'etichetta genuinamente assente, quindi non è specifico di una
+    # farmacia o di un layout: si applica sempre.
+    valori_tipici = {"48.48", "33.74", "5.0", "5.00", "1.53", "8.88", "97.63"}
+    campi_p = ["etichetta_prezzo_sost", "etichetta_prezzo_on",
+               "etichetta_prezzo_rec", "etichetta_prezzo_iva", "etichetta_prezzo_tot"]
+    sospetti = sum(1 for c in campi_p if str(dati.get(c, "")) in valori_tipici)
+    if sospetti >= 3:
+        log.warning(
+            f"  Prezzi tipici su '{dati.get('nome_farmacia', '?')}' — "
+            f"probabile allucinazione -> OCR_INCERTO"
+        )
+        for c in campi_p:
+            if str(dati.get(c, "")) in valori_tipici:
+                dati[c] = "OCR_INCERTO"
 
     # THC: estrai solo il numero
     if dati.get("THC"):
@@ -1265,9 +1383,10 @@ def sanity_check(dati: dict) -> dict:
     # è solo il campo dedicato che a volte il modello non compila anche
     # quando il termine è letteralmente presente nel testo.
     METODI_ESTRATTIVI_NOTI_CANON = {
-        "ramella": "Ramella", "calvi": "Calvi", "sifap": "SIFAP",
+        "ramella": "Ramella", "calvi": "Calvi", "sifap": "SIFAP", "sifo": "SIFO",
         "sicam": "SICAM", "romano": "Romano",
         "hazecamp": "Hazecamp", "hazekamp": "Hazekamp", "cannazza": "Cannazza",
+        "tilray": "Tilray", "avextra": "Avextra",
     }
     if _is_empty_campo(dati.get("metodo_estrattivo_olio", "")):
         testo_lower = str(dati.get("testo_prescrizione", "")).lower()
@@ -1300,6 +1419,31 @@ def sanity_check(dati: dict) -> dict:
                         break
                 if trovato:
                     break
+    else:
+        # Il campo NON è vuoto — il modello ha letto qualcosa, ma potrebbe
+        # essere un refuso OCR del nome canonico (es. "Tylray", "Tilroy"
+        # invece di "Tilray") che finora restava così com'è, perché il
+        # blocco sopra scatta solo a campo vuoto. Stessa canonicalizzazione
+        # fuzzy già usata per nome_farmacia/forma_farmaceutica: se il
+        # valore letto è abbastanza vicino a un nome noto, lo riconduciamo
+        # alla forma canonica, altrimenti lo lasciamo invariato (potrebbe
+        # essere un metodo genuinamente diverso, non ancora in elenco).
+        metodo_attuale = str(dati["metodo_estrattivo_olio"]).strip()
+        metodo_attuale_lower = metodo_attuale.lower()
+        if metodo_attuale_lower not in METODI_ESTRATTIVI_NOTI_CANON.values() \
+           and metodo_attuale_lower not in [c.lower() for c in METODI_ESTRATTIVI_NOTI_CANON.values()]:
+            migliore_match, migliore_rapporto = None, None
+            for canonico in set(METODI_ESTRATTIVI_NOTI_CANON.values()):
+                d = _distanza_levenshtein_semplice(metodo_attuale_lower, canonico.lower())
+                rapporto = d / max(len(canonico), 1)
+                if migliore_rapporto is None or rapporto < migliore_rapporto:
+                    migliore_match, migliore_rapporto = canonico, rapporto
+            if migliore_rapporto is not None and migliore_rapporto <= 0.25:
+                log.info(
+                    f"  metodo_estrattivo_olio: '{metodo_attuale}' corretto fuzzy in "
+                    f"'{migliore_match}' (differenza {migliore_rapporto:.0%})"
+                )
+                dati["metodo_estrattivo_olio"] = migliore_match
 
     # Canonicalizzazione fuzzy di nome_farmacia — critica ora che il
     # sistema a profili farmacia (date_corrector.py) dipende da un match
@@ -1310,6 +1454,16 @@ def sanity_check(dati: dict) -> dict:
     # e proverebbe tutti i profili in sequenza invece di usare subito
     # quello giusto. Tolleranza proporzionale alla lunghezza (nomi lunghi
     # tollerano piu' caratteri di differenza rispetto a nomi corti).
+    FARMACIE_CANONICHE = [
+        "Farmacia Tili Snc", "Farmacia Di Lora Srl",
+        "Farmacia Pomi di dr. Collivasone A. & C. Snc",
+        "Farmacia Ramella dott.ri G. e A. Sas",
+        "Farmacia Mazzucchelli F. & C. Snc",
+        "Farmacia Peroni dr Antonio E. & C. Sas",
+        "Farmacia Comunale N.2", "Farmacia Stefini & C Sas",
+        "Farmacia Introini dr. Paolo & C. Sas",
+        "Farmacia Di Crenna", "Farmacia Ponti",
+    ]
     nome_farmacia_attuale = str(dati.get("nome_farmacia", "")).strip()
     if nome_farmacia_attuale and nome_farmacia_attuale != "FARMACIA NON RICONOSCIUTA":
         if FARMACIE_DIZIONARIO_DISPONIBILE:
@@ -1319,30 +1473,19 @@ def sanity_check(dati: dict) -> dict:
                     f"  nome_farmacia: '{nome_farmacia_attuale}' corretta fuzzy in '{canonico}'"
                 )
                 dati["nome_farmacia"] = canonico
-        else:
-            FARMACIE_CANONICHE = [
-                "Farmacia Tili Snc", "Farmacia Di Lora Srl",
-                "Farmacia Pomi di dr. Collivasone A. & C. Snc",
-                "Farmacia Ramella dott.ri G. e A. Sas",
-                "Farmacia Mazzucchelli F. & C. Snc",
-                "Farmacia Peroni dr Antonio E. & C. Sas",
-                "Farmacia Comunale N.2", "Farmacia Stefini & C Sas",
-                "Farmacia Introini dr. Paolo & C. Sas",
-                "Farmacia Di Crenna", "Farmacia Ponti",
-            ]
-            if nome_farmacia_attuale not in FARMACIE_CANONICHE:
-                migliore_match, migliore_rapporto = None, None
-                for canonica in FARMACIE_CANONICHE:
-                    d = _distanza_levenshtein_semplice(nome_farmacia_attuale.lower(), canonica.lower())
-                    rapporto = d / max(len(canonica), 1)
-                    if migliore_rapporto is None or rapporto < migliore_rapporto:
-                        migliore_match, migliore_rapporto = canonica, rapporto
-                if migliore_rapporto is not None and migliore_rapporto <= 0.25:
-                    log.info(
-                        f"  nome_farmacia: '{nome_farmacia_attuale}' corretta fuzzy in "
-                        f"'{migliore_match}' (differenza {migliore_rapporto:.0%})"
-                    )
-                    dati["nome_farmacia"] = migliore_match
+        elif nome_farmacia_attuale not in FARMACIE_CANONICHE:
+            migliore_match, migliore_rapporto = None, None
+            for canonica in FARMACIE_CANONICHE:
+                d = _distanza_levenshtein_semplice(nome_farmacia_attuale.lower(), canonica.lower())
+                rapporto = d / max(len(canonica), 1)
+                if migliore_rapporto is None or rapporto < migliore_rapporto:
+                    migliore_match, migliore_rapporto = canonica, rapporto
+            if migliore_rapporto is not None and migliore_rapporto <= 0.25:
+                log.info(
+                    f"  nome_farmacia: '{nome_farmacia_attuale}' corretta fuzzy in "
+                    f"'{migliore_match}' (differenza {migliore_rapporto:.0%})"
+                )
+                dati["nome_farmacia"] = migliore_match
 
 
     # Stessa idea: se il campo è vuoto ma testo_prescrizione contiene le
@@ -1450,11 +1593,12 @@ def recupera_profilo_farmacia_da_regione(barcode: str) -> str:
     if not farmacia_id:
         return ""
 
-    farmacia_id_upper = farmacia_id.upper()
     if FARMACIE_DIZIONARIO_DISPONIBILE:
         canonico, _codice = farmacie_dizionario.normalizza_nome_farmacia(farmacia_id)
-        if canonico and canonico != farmacia_id:
+        if canonico:
             return canonico
+
+    farmacia_id_upper = farmacia_id.upper()
     for chiave, profilo in MAPPATURA_FARMACIA_ID_A_PROFILO.items():
         if chiave in farmacia_id_upper:
             return profilo
@@ -1469,7 +1613,10 @@ def get_date_corrector():
             # DateCorrector non gestisce più data_prescrizione/data_emissione
             # affatto (prese esclusivamente da Regione in merge_regione.py) —
             # gestisce solo i crop dedicati per gli altri campi.
-            _date_corrector = DateCorrector(qwen_model="qwen2.5vl:32b")
+            # Riusa MODELLO_PESANTE invece di una stringa hardcoded separata:
+            # prima erano due valori indipendenti che potevano disallinearsi
+            # (cambiando MODELLO_PESANTE sopra, qui restava il vecchio modello).
+            _date_corrector = DateCorrector(qwen_model=MODELLO_PESANTE)
         except Exception as e:
             log.warning(f'DateCorrector non disponibile: {e}')
     return _date_corrector
@@ -1482,6 +1629,8 @@ def costruisci_prompt(etichetta_result, prompt_base: str = PROMPT) -> str:
     resta valida la regola anti-allucinazione generica già presente nel
     prompt base.
     """
+    if MARCATORE_ELENCO_FARMACIE in prompt_base:
+        prompt_base = prompt_base.replace(MARCATORE_ELENCO_FARMACIE, _blocco_elenco_farmacie())
     if etichetta_result is None or etichetta_result.confidence == "bassa":
         return prompt_base
 
@@ -1556,29 +1705,55 @@ def estrai_dati(pdf_path: Path) -> dict:
     dati = {}
     almeno_un_gruppo_riuscito = False
 
-    for nome_gruppo, prompt_gruppo, e_gruppo_etichetta, peso in gruppi_estrazione():
+    for nome_gruppo, prompt_gruppo, e_gruppo_etichetta, peso in GRUPPI_ESTRAZIONE:
         prompt_finale = prompt_gruppo
         if e_gruppo_etichetta:
             prompt_finale = costruisci_prompt(etichetta_result, prompt_gruppo)
 
         modello_gruppo = MODELLO_PESANTE if peso == "pesante" else MODELLO_LEGGERO
         log.info(f"  [{nome_gruppo}] uso modello {modello_gruppo} ({peso})")
+        _prepara_modello(modello_gruppo)
+
+        # num_gpu incluso SOLO se qualcuno lo forza esplicitamente (es. --gpu 0
+        # per debug CPU-only). Di default (NUM_GPU=None) il parametro non viene
+        # proprio passato, lasciando che sia Ollama a decidere in autonomia in
+        # base alla VRAM realmente disponibile — vedi commento sopra NUM_GPU
+        # sul perché forzare un valore fisso (99) ha peggiorato le cose.
+        opzioni_chiamata = {"num_ctx": NUM_CTX, "temperature": 0.0}
+        if NUM_GPU is not None:
+            opzioni_chiamata["num_gpu"] = NUM_GPU
 
         try:
             response = ollama.chat(
                 model=modello_gruppo,
                 messages=[{
                     "role": "user",
-                    "content": prompt_finale,
+                    "content": prompt_finale + suffisso_no_think(modello_gruppo),
                     "images": [img_b64]
                 }],
-                options={
-                    "num_gpu": NUM_GPU,
-                    "num_ctx": NUM_CTX,
-                    "temperature": 0.0
-                }
+                # Qwen3-VL supporta il "thinking mode": lo disabilitiamo sempre
+                # esplicitamente, sia perché rallenta la risposta (token di
+                # ragionamento aggiuntivi) sia perché, se non onorato per un
+                # bug di libreria/versione, può inserire testo prima del JSON
+                # e rompere pulisci_json() più sotto.
+                think=False,
+                options=opzioni_chiamata
             )
             testo = response["message"]["content"]
+
+            # Diagnostica: se il campo "thinking" separato non è vuoto,
+            # significa che think=False NON è stato rispettato dalla
+            # combinazione ollama/ollama-python in uso — il modello ha
+            # comunque generato token di ragionamento (costano tempo)
+            # anche se sono tenuti fuori da "content" e non rompono il
+            # JSON. Utile per capire se il rallentamento viene da qui.
+            pensiero = response["message"].get("thinking")
+            if pensiero:
+                log.warning(
+                    f"  [{nome_gruppo}] think=False non rispettato: il modello ha "
+                    f"comunque generato {len(pensiero)} caratteri di ragionamento nascosto"
+                )
+            log.info(f"  [{nome_gruppo}] risposta grezza: {len(testo)} caratteri")
         except Exception as e:
             log.error(f"  [{nome_gruppo}] Errore Ollama ({modello_gruppo}): {e}")
             continue
@@ -1638,6 +1813,10 @@ def estrai_dati(pdf_path: Path) -> dict:
     # NOTA: data_prescrizione/data_emissione vengono prese ESCLUSIVAMENTE
     # da Regione in merge_regione.py — non vengono nemmeno più estratte qui,
     # né da questo blocco né dal prompt principale (rimosse del tutto).
+    # Le correzioni di date_corrector.py usano tutte MODELLO_PESANTE: lo
+    # scarico qui esplicitamente il modello leggero appena usato sopra,
+    # altrimenti resterebbero caricati insieme (vedi _prepara_modello).
+    _prepara_modello(MODELLO_PESANTE)
     corrector = get_date_corrector()
 
     # Guardia: se l'etichetta è CONFERMATA assente (confidenza sufficiente,
@@ -1762,7 +1941,12 @@ def main():
     ap.add_argument("--test", action="store_true",
                     help="Elabora solo la prima ricetta trovata")
     ap.add_argument("--gpu", type=int, default=NUM_GPU,
-                    help="0=CPU, 1=GPU (default: 1)")
+                    help="Numero di layer del modello da offloadare su GPU, non un booleano. "
+                         "Default: nessun valore forzato, decide Ollama in autonomia in base "
+                         "alla VRAM disponibile (consigliato). 0=forza CPU-only (debug). "
+                         "ATTENZIONE: forzare un numero alto (es. 99) con un modello più "
+                         "grande della VRAM disponibile può causare uno sforamento nella "
+                         "shared GPU memory di Windows, molto più lento del default automatico.")
     ap.add_argument("--model", type=str, default=None,
                     help=f"Se specificato, forza LO STESSO modello su tutti e 4 i "
                          f"gruppi di estrazione (utile per test A/B). Se omesso, "
@@ -1791,7 +1975,7 @@ def main():
         pdf_files = [pdf_files[0]]
         log.info("Modalità TEST — elaboro solo la prima ricetta")
 
-    log.info(f"Modello: {OLLAMA_MODEL} | GPU: {NUM_GPU} | Ricette: {len(pdf_files)}")
+    log.info(f"Modello: {OLLAMA_MODEL} | GPU: {NUM_GPU if NUM_GPU is not None else 'auto (decide Ollama)'} | Ricette: {len(pdf_files)}")
 
     OUTPUT_DIR.mkdir(exist_ok=True)
     risultati, errori = [], []
