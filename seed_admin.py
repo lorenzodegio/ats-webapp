@@ -1,10 +1,12 @@
 """
 Crea utenti, configurazione iniziale e censimento farmacie.
 
-Di default NON crea lotti di prova: l'app parte vuota (primo uso reale).
-Per lo sviluppo frontend: $env:SEED_DEMO_LOTTI="1"; python seed_admin.py
+Di default: solo admin, niente lotti di prova (primo uso reale).
+Utenti demo: SEED_DEMO_UTENTI=1
+Lotti finti: SEED_DEMO_LOTTI=1
 """
 import getpass
+import os
 from datetime import datetime, timedelta
 
 from app.database import Base, engine, SessionLocal
@@ -42,19 +44,23 @@ def crea_utenti(db):
         nome="Amministratore ATS", email="admin@ats-insubria.example",
         ruolo=RuoloUtente.amministratore,
     )
-    operatore = Utente(
-        username="operatore", password_hash=hash_password("operatore123"),
-        nome="Operatore Demo", email="operatore@ats-insubria.example",
-        ruolo=RuoloUtente.operatore,
-    )
-    revisore = Utente(
-        username="revisore", password_hash=hash_password("revisore123"),
-        nome="Revisore Demo", email="revisore@ats-insubria.example",
-        ruolo=RuoloUtente.revisore,
-    )
-    db.add_all([admin, operatore, revisore])
+    db.add(admin)
+    if os.environ.get("SEED_DEMO_UTENTI") == "1":
+        operatore = Utente(
+            username="operatore", password_hash=hash_password("operatore123"),
+            nome="Operatore Demo", email="operatore@ats-insubria.example",
+            ruolo=RuoloUtente.operatore,
+        )
+        revisore = Utente(
+            username="revisore", password_hash=hash_password("revisore123"),
+            nome="Revisore Demo", email="revisore@ats-insubria.example",
+            ruolo=RuoloUtente.revisore,
+        )
+        db.add_all([operatore, revisore])
+        print("Creati utenti: admin, operatore/operatore123, revisore/revisore123")
+    else:
+        print("Creato solo utente admin (niente operatore/revisore demo).")
     db.commit()
-    print("Creati utenti: admin/admin123, operatore/operatore123, revisore/revisore123")
     return admin
 
 
@@ -215,8 +221,6 @@ def popola_lotti_demo(db, operatore):
 
 
 if __name__ == "__main__":
-    import os
-
     db = SessionLocal()
     try:
         admin = crea_utenti(db)

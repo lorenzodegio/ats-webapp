@@ -29,6 +29,7 @@ consegna per l'elenco preciso dei punti da verificare.
 """
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -46,8 +47,7 @@ from app.models import (
 
 log = logging.getLogger("RealPipeline")
 
-# Cartella condivisa con i container Docker (stesso percorso di
-# docker-compose.yml: "./dati:/dati" per tutti e 4 i servizi)
+# Cartella condivisa con i container Docker (vedi docker-compose.yml).
 DATI_DIR = Path("dati")
 RICETTE_RAW = DATI_DIR / "ricette_raw"
 RICETTE_STAGING_IMAGES = DATI_DIR / "ricette_staging" / "images"
@@ -59,6 +59,13 @@ OUTPUT_DIR = DATI_DIR / "output"
 FAKE_SP_ROOT = "sharepoint_finto"  # stessa cartella usata da fake_pipeline.py
 
 FILE_JSON_DA_ESCLUDERE = {"riepilogo.json"}
+
+# Dentro il container webapp il progetto e' su /workspace; sull'host e' la
+# cartella del repo. Serve a `docker compose` per trovare docker-compose.yml.
+_MOUNT_CONTAINER = Path("/workspace")
+RADICE_PROGETTO = (
+    _MOUNT_CONTAINER if os.environ.get("HOST_PROJECT_ROOT") else Path(__file__).resolve().parent.parent
+)
 
 # Barre di progresso stile tqdm (es. "Progress: |████---| 97.8% Complete"):
 # vanno rilevate per aggiornare la stessa riga di log invece di accumularne
@@ -213,12 +220,16 @@ def _esegui_container(nome_servizio: str, db: Session, elaborazione: Elaborazion
     elaborazione.nome_container = nome_container
     db.commit()
 
-    comando = ["docker", "compose", "run", "--name", nome_container, "--rm", nome_servizio]
+    comando = [
+        "docker", "compose", "-p", "ats-webapp",
+        "run", "--name", nome_container, "--rm", nome_servizio,
+    ]
     log.info(f"Eseguo: {' '.join(comando)}")
 
     processo = subprocess.Popen(
         comando, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, encoding="utf-8", errors="replace", bufsize=1, universal_newlines=True,
+        text=True, encoding="utf-8", errors="replace", bufsize=1,
+        universal_newlines=True, cwd=str(RADICE_PROGETTO),
     )
 
     ultima_riga_progresso = None

@@ -10,3 +10,5 @@ sharepoint_finto/
 dati/
 .DS_Store
 ats-webapp.zip
+postgres-dati/
+ollama-dati/
