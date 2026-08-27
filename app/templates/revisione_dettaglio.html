@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block titolo %}
+  {% if modo == 'barcode' %}Preprocessing{% elif modo == 'ocr' %}OCR{% else %}Difformità{% endif %}
+  — {{ lotto.nome }}
+{% endblock %}
+
+{% block contenuto %}
+{% include "_wizard_fasi_lotto.html" %}
+
+<div class="breadcrumb-revisione">
+  <a href="/lotti/{{ lotto.id }}">&larr; Torna a {{ lotto.nome }}</a>
+  <span class="breadcrumb-revisione__sep">/</span>
+  <span>
+    {% if modo == 'barcode' %}Preprocessing
+    {% elif modo == 'ocr' %}Revisione OCR
+    {% else %}Revisione difformità{% endif %}
+  </span>
+  <span class="breadcrumb-revisione__sep">/</span>
+  <span class="mono">{{ presc.barcode or (presc.sp_pdf_path.split('/')[-1] if presc.sp_pdf_path else presc.id) }}</span>
+</div>
+
+<div class="split-revisione">
+  <div class="card split-revisione__pdf">
+    <h2 class="card__titolo">PDF originale</h2>
+    {% if presc.sp_pdf_path %}
+    <iframe class="split-revisione__iframe" title="PDF prescrizione" src="/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/pdf"></iframe>
+    {% else %}
+    <p class="stato-vuoto">PDF non disponibile.</p>
+    {% endif %}
+  </div>
+
+  <div class="card split-revisione__azione">
+    {% if modo == 'barcode' %}
+    <h2 class="card__titolo">Barcode non letto</h2>
+    <p style="font-size:13px; color:var(--text-secondary); margin-top:-8px;">
+      Se è il fronte di una prescrizione, inserisci il barcode. Se è un retro o un foglio senza codice, escludi la pagina: non andrà in OCR.
+    </p>
+    <form method="post" action="/lotti/{{ lotto.id }}/barcode/{{ presc.id }}" style="display:flex; flex-direction:column; gap:10px;">
+      <label for="nuovo_barcode">Barcode corretto</label>
+      <input id="nuovo_barcode" type="text" name="nuovo_barcode" placeholder="Barcode" required
+             style="padding:10px 12px; border:1px solid var(--border-color); border-radius:8px;">
+      <button type="submit" class="btn btn--primario">Salva barcode e torna all'elenco</button>
+    </form>
+    <form method="post" action="/lotti/{{ lotto.id }}/barcode/{{ presc.id }}/escludi" style="margin-top:12px;"
+          onsubmit="return confirm('Escludere questa pagina? Non verrà elaborata in OCR.');">
+      <button type="submit" class="btn btn--secondario">Escludi: non è un fronte di prescrizione</button>
+    </form>
+
+    {% elif modo == 'ocr' %}
+    <h2 class="card__titolo">Campi riconosciuti</h2>
+    <p style="font-size:13px; color:var(--text-secondary); margin-top:-8px;">
+      Score OCR: {{ presc.score_ocr or '—' }}. Modifica e conferma per tornare all'elenco della fase OCR.
+    </p>
+    {% if presc.dati_ocr %}
+    <form method="post" action="/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/ocr" class="form-ocr-split">
+      <input type="hidden" name="torna_elenco" value="1">
+      {% for campo, etichetta in etichette_ocr.items() %}
+      {% set val = valori_ocr.get(campo, '') %}
+      <div class="campo">
+        <label for="ocr-{{ campo }}">{{ etichetta }}</label>
+        {% if campo in campi_booleani %}
+        <input type="checkbox" name="{{ campo }}" id="ocr-{{ campo }}" value="true"
+               {% if val == true or val == 'true' %}checked{% endif %}>
+        {% elif campo in campi_area %}
+        <textarea name="{{ campo }}" id="ocr-{{ campo }}" rows="3">{{ val or '' }}</textarea>
+        {% else %}
+        <input type="text" name="{{ campo }}" id="ocr-{{ campo }}" value="{{ val if val is not none else '' }}">
+        {% endif %}
+      </div>
+      {% endfor %}
+      <button type="submit" class="btn btn--primario">Conferma modifiche e torna all'elenco</button>
+    </form>
+    {% else %}
+    <p class="stato-vuoto">Dati OCR non ancora disponibili.</p>
+    {% endif %}
+
+    {% else %}
+    <h2 class="card__titolo">Difformità di questa prescrizione</h2>
+    {% if da_gestire %}
+    <table class="tabella">
+      <thead><tr><th>Codice</th><th>Descrizione</th><th></th></tr></thead>
+      <tbody>
+        {% for d in da_gestire %}
+        <tr>
+          <td class="mono">{{ d.codice }}</td>
+          <td>{{ d.descrizione }}</td>
+          <td style="display:flex; gap:8px;">
+            <form method="post" action="/lotti/{{ lotto.id }}/difformita/{{ d.id }}/conferma">
+              <input type="hidden" name="next" value="/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/revisione-difformita">
+              <button type="submit" class="btn btn--secondario">Conferma</button>
+            </form>
+            <form method="post" action="/lotti/{{ lotto.id }}/difformita/{{ d.id }}/escludi">
+              <input type="hidden" name="next" value="/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/revisione-difformita">
+              <button type="submit" class="btn btn--secondario">Escludi</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="stato-vuoto">Nessuna difformità da gestire su questa ricetta.</div>
+    <a class="btn btn--primario" href="/lotti/{{ lotto.id }}">Torna all'elenco</a>
+    {% endif %}
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

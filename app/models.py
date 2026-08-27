@@ -300,6 +300,7 @@ class StatoBarcode(str, enum.Enum):
     letto = "letto"
     undefined = "undefined"
     corretto_manuale = "corretto_manuale"
+    escluso = "escluso"
 
 
 class StatoRevisionePrescrizione(str, enum.Enum):

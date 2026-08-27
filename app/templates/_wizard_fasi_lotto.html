@@ -1,0 +1,8 @@
+{% set n = fase_wizard %}
+<div class="wizard-steps wizard-steps--fasi" style="margin-bottom: 24px;">
+  {% for num, etichetta in fasi_wizard %}
+  <div class="wizard-step{% if num == n %} wizard-step--attivo{% elif num < n %} wizard-step--completato{% endif %}">
+    <span class="wizard-step__numero">{{ num }}</span>{{ etichetta }}
+  </div>
+  {% endfor %}
+</div>

@@ -802,3 +802,46 @@ table.tabella tr:last-child td { border-bottom: none; }
   padding: 4px 24px 20px;
   border-top: 1px solid var(--border-color);
 }
+
+.wizard-steps--fasi .wizard-step {
+  font-size: 12px;
+  padding: 8px 6px;
+}
+
+.breadcrumb-revisione {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+}
+.breadcrumb-revisione a { color: var(--sage); font-weight: 600; }
+.breadcrumb-revisione__sep { margin: 0 8px; color: var(--border-color); }
+
+.split-revisione {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+.split-revisione__iframe {
+  width: 100%;
+  height: 78vh;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: #fff;
+}
+.split-revisione__azione .campo input[type="text"],
+.split-revisione__azione .campo textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+}
+.form-ocr-split { max-height: 78vh; overflow-y: auto; padding-right: 4px; }
+
+@media (max-width: 960px) {
+  .split-revisione { grid-template-columns: 1fr; }
+  .split-revisione__iframe { height: 50vh; }
+}
