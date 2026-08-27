@@ -117,5 +117,15 @@
     btnAvvia.textContent = "Creazione in corso…";
   });
 
+    document.querySelectorAll("#wizard-steps [data-step-indicatore]").forEach((indicatore) => {
+    indicatore.style.cursor = "pointer";
+    indicatore.addEventListener("click", () => {
+      const n = Number(indicatore.dataset.stepIndicatore);
+      if (n < 1 || n > TOTALE_STEP) return;
+      if (n > stepCorrente && !validaStepCorrente()) return;
+      mostraStep(n);
+    });
+  });
+
   mostraStep(1);
 })();

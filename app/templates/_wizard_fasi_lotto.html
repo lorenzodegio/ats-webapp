@@ -1,8 +1,15 @@
 {% set n = fase_wizard %}
+{% set max_n = fase_corrente if fase_corrente is defined else n %}
 <div class="wizard-steps wizard-steps--fasi" style="margin-bottom: 24px;">
   {% for num, etichetta in fasi_wizard %}
-  <div class="wizard-step{% if num == n %} wizard-step--attivo{% elif num < n %} wizard-step--completato{% endif %}">
-    <span class="wizard-step__numero">{{ num }}</span>{{ etichetta }}
-  </div>
+    {% if lotto is defined and num <= max_n %}
+    <a href="/lotti/{{ lotto.id }}?fase={{ num }}" class="wizard-step{% if num == n %} wizard-step--attivo{% elif num < max_n %} wizard-step--completato{% endif %}">
+      <span class="wizard-step__numero">{{ num }}</span>{{ etichetta }}
+    </a>
+    {% else %}
+    <div class="wizard-step wizard-step--bloccato" title="Fase non ancora disponibile">
+      <span class="wizard-step__numero">{{ num }}</span>{{ etichetta }}
+    </div>
+    {% endif %}
   {% endfor %}
 </div>

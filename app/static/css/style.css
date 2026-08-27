@@ -806,6 +806,17 @@ table.tabella tr:last-child td { border-bottom: none; }
 .wizard-steps--fasi .wizard-step {
   font-size: 12px;
   padding: 8px 6px;
+  text-decoration: none;
+  color: inherit;
+  display: block;
+  box-sizing: border-box;
+}
+.wizard-steps--fasi a.wizard-step:hover {
+  filter: brightness(0.97);
+}
+.wizard-step--bloccato {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .breadcrumb-revisione {

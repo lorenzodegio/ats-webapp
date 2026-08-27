@@ -104,8 +104,19 @@
   </div>
 </div>
 
+{# ---------------- Dati lotto / caricamento (solo consultazione) ---------------- #}
+{% if fase_wizard <= 2 %}
+<div class="card">
+  <h2 class="card__titolo">{% if fase_wizard == 1 %}Dati lotto{% else %}Caricamento{% endif %}</h2>
+  <div class="riepilogo-riga"><span class="riepilogo-riga__etichetta">Nome</span><span class="riepilogo-riga__valore">{{ lotto.nome }}</span></div>
+  <div class="riepilogo-riga"><span class="riepilogo-riga__etichetta">Periodo</span><span class="riepilogo-riga__valore">{{ "%02d"|format(lotto.mese) }}/{{ lotto.anno }}</span></div>
+  <div class="riepilogo-riga"><span class="riepilogo-riga__etichetta">PDF caricati</span><span class="riepilogo-riga__valore">{{ lotto.n_pdf_caricati or 0 }}</span></div>
+  <div class="riepilogo-riga"><span class="riepilogo-riga__etichetta">Excel</span><span class="riepilogo-riga__valore mono">{{ lotto.excel_input_filename or 'Non caricato' }}</span></div>
+</div>
+{% endif %}
+
 {# ---------------- Revisione barcode ---------------- #}
-{% if lotto.stato.value == "revisione_barcode" %}
+{% if fase_wizard == 3 %}
 <div class="card" id="revisione-barcode">
   <h2 class="card__titolo">Revisione barcode</h2>
   {% if prescrizioni_undefined %}
@@ -137,14 +148,14 @@
   {% else %}
     <div class="stato-vuoto">Tutti i barcode sono stati letti correttamente.</div>
     <form method="post" action="/lotti/{{ lotto.id }}/avvia-ocr" style="margin-top:16px;">
-      <button type="submit" class="btn btn--primario">Avvia elaborazione OCR &rarr;</button>
+      <button type="submit" class="btn btn--primario"{% if lotto.stato.value != 'revisione_barcode' %} disabled{% endif %}>Avvia elaborazione OCR &rarr;</button>
     </form>
   {% endif %}
 </div>
 {% endif %}
 
 {# ---------------- Revisione qualita ---------------- #}
-{% if lotto.stato.value == "revisione_qualita" %}
+{% if fase_wizard == 4 %}
 <div class="card">
   <h2 class="card__titolo">Revisione qualita OCR</h2>
   <p style="font-size:13px; color: var(--text-secondary); margin-top:-8px;">
@@ -177,13 +188,13 @@
     </tbody>
   </table>
   <form method="post" action="/lotti/{{ lotto.id }}/avvia-difformita" style="margin-top:16px;">
-    <button type="submit" class="btn btn--primario">Avvia analisi difformita &rarr;</button>
+    <button type="submit" class="btn btn--primario"{% if lotto.stato.value != 'revisione_qualita' %} disabled{% endif %}>Avvia analisi difformita &rarr;</button>
   </form>
 </div>
 {% endif %}
 
 {# ---------------- Revisione difformita ---------------- #}
-{% if lotto.stato.value == "revisione_difformita" %}
+{% if fase_wizard == 5 %}
 <div class="card" id="revisione-difformita">
   <h2 class="card__titolo">Revisione difformità</h2>
   {% if difformita_da_gestire %}
@@ -235,6 +246,7 @@
 {% endif %}
 
 {# ---------------- Completato / Archiviato ---------------- #}
+{% if fase_wizard == 6 %}
 {% if lotto.stato.value == "completato" %}
 <div class="card">
   <h2 class="card__titolo">Cartelle farmacie</h2>
@@ -261,6 +273,7 @@
   </div>
   {% endif %}
 </div>
+{% endif %}
 {% endif %}
 
 {# ---------------- Prescrizioni e difformita: storico completo ---------------- #}
