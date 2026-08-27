@@ -52,6 +52,18 @@ MESI_IT = ["", "GENNAIO", "FEBBRAIO", "MARZO", "APRILE", "MAGGIO", "GIUGNO",
            "LUGLIO", "AGOSTO", "SETTEMBRE", "OTTOBRE", "NOVEMBRE", "DICEMBRE"]
 
 
+def _fase_vista_da_query(request: Request, lotto: LottoMensile) -> int:
+    corrente = indice_fase_wizard(lotto.stato)
+    grezzo = request.query_params.get("fase")
+    if grezzo is None:
+        return corrente
+    try:
+        richiesta = int(grezzo)
+    except ValueError:
+        return corrente
+    return max(1, min(corrente, richiesta))
+
+
 def _nome_cartella(mese: int, anno: int) -> str:
     return f"{MESI_IT[mese]}_{anno}"
 
@@ -295,7 +307,8 @@ def dettaglio_lotto(
                 elaborazione_attiva.fase if elaborazione_attiva else None,
                 in_pausa,
             ),
-            "fase_wizard": indice_fase_wizard(lotto.stato),
+            "fase_corrente": indice_fase_wizard(lotto.stato),
+            "fase_wizard": _fase_vista_da_query(request, lotto),
             "fasi_wizard": FASI_WIZARD_LOTTO,
         },
     )
@@ -336,7 +349,7 @@ def correggi_barcode(
             lotto.n_barcode_undefined = max(0, (lotto.n_barcode_undefined or 0) - 1)
             lotto.n_barcode_letti = (lotto.n_barcode_letti or 0) + 1
     db.commit()
-    return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+    return RedirectResponse(url=f"/lotti/{lotto_id}?fase=3", status_code=302)
 
 
 @router.post("/lotti/{lotto_id}/barcode/{prescrizione_id}/escludi")
@@ -360,10 +373,7 @@ def escludi_pagina_non_fronte(
         lotto.n_barcode_undefined = max(0, (lotto.n_barcode_undefined or 0) - 1)
         lotto.n_prescrizioni_totali = max(0, (lotto.n_prescrizioni_totali or 0) - 1)
     db.commit()
-    return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
-
-
-@router.get("/lotti/{lotto_id}/prescrizioni/{prescrizione_id}/pdf")
+    return RedirectResponse(url=f"/lotti/{lotto_id}?fase=3", status_code=302)
 def visualizza_pdf_prescrizione(
     lotto_id: str, prescrizione_id: str,
     db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
@@ -436,7 +446,8 @@ def _ctx_revisione(request, utente, lotto, presc, modo):
     return {
         "request": request, "utente": utente, "voce_attiva": "elaborazioni",
         "lotto": lotto, "presc": presc, "modo": modo,
-        "fase_wizard": indice_fase_wizard(lotto.stato),
+        "fase_corrente": indice_fase_wizard(lotto.stato),
+        "fase_wizard": {"barcode": 3, "ocr": 4, "difformita": 5}.get(modo, indice_fase_wizard(lotto.stato)),
         "fasi_wizard": FASI_WIZARD_LOTTO,
         "etichette_ocr": ETICHETTE_CAMPO_OCR,
         "campi_booleani": ("timbro_medico", "firma_medico"),
@@ -803,7 +814,7 @@ async def correggi_ocr(
     db.commit()
     torna = form_data.get("torna_elenco")
     if torna:
-        return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+        return RedirectResponse(url=f"/lotti/{lotto_id}?fase=4", status_code=302)
     return {"stato": "ok"}
 
 
