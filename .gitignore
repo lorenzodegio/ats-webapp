@@ -8,6 +8,7 @@ ats_webapp.db
 uploads/
 sharepoint_finto/
 dati/
+media/
 .DS_Store
 ats-webapp.zip
 postgres-dati/

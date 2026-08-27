@@ -27,7 +27,16 @@ from app.models import (
 )
 from app.fake_pipeline import (
     avvia_preprocessing_fake, avvia_ocr_fake, avvia_difformita_fake,
-    FAKE_SP_ROOT, PERCORSO_CARTELLA_OUTPUT_RECENTI,
+    PERCORSO_CARTELLA_OUTPUT_RECENTI,
+)
+from app.storage import (
+    SHAREPOINT_FINTO,
+    cartella_pagine_lotto,
+    percorso_pdf_prescrizione as _percorso_pdf_prescrizione,
+    relativo_a_radice,
+    rinomina_pagina_media,
+    risolvi_anteprima as _risolvi_anteprima,
+    salva_pdf_caricato,
 )
 from app.real_pipeline import (
     avvia_preprocessing_reale, avvia_ocr_reale, avvia_difformita_reale,
@@ -67,62 +76,6 @@ def _fase_vista_da_query(request: Request, lotto: LottoMensile) -> int:
 
 def _nome_cartella(mese: int, anno: int) -> str:
     return f"{MESI_IT[mese]}_{anno}"
-
-
-def _sotto_cartella_consentita(percorso: Path) -> bool:
-    risolto = percorso.resolve()
-    for radice in (Path(FAKE_SP_ROOT).resolve(), Path("dati").resolve()):
-        try:
-            risolto.relative_to(radice)
-            return True
-        except ValueError:
-            continue
-    return False
-
-
-def _percorso_pdf_prescrizione(presc: Prescrizione):
-    rels = []
-    if presc.sp_pdf_path:
-        rel = presc.sp_pdf_path.replace("\\", "/")
-        rels.append(rel)
-        rels.append(Path(rel).name)
-        stem = Path(rel).stem
-        rels.append(f"dati/ricette_staging/pdfs/{stem}.pdf")
-        rels.append(f"dati/ricette/{stem}.pdf")
-    if presc.sp_png_path:
-        png = Path(presc.sp_png_path.replace("\\", "/"))
-        rels.append(str(png.with_suffix(".pdf")))
-        rels.append(f"dati/ricette_staging/pdfs/{png.stem}.pdf")
-
-    visti = set()
-    for rel in rels:
-        if not rel or rel in visti:
-            continue
-        visti.add(rel)
-        for base in (Path("."), Path(FAKE_SP_ROOT)):
-            candidato = (base / rel).resolve()
-            if candidato.is_file() and _sotto_cartella_consentita(candidato):
-                return str(candidato)
-    if presc.sp_pdf_path:
-        stem = Path(presc.sp_pdf_path.replace("\\", "/")).stem
-        for cartella in (Path("dati/ricette_staging"), Path("dati/ricette")):
-            if not cartella.is_dir():
-                continue
-            for trovato in cartella.rglob(f"{stem}.pdf"):
-                if trovato.is_file() and _sotto_cartella_consentita(trovato):
-                    return str(trovato.resolve())
-    return None
-
-
-def _percorso_png_prescrizione(presc: Prescrizione):
-    if not presc.sp_png_path:
-        return None
-    rel = presc.sp_png_path.replace("\\", "/")
-    for base in (Path("."), Path(FAKE_SP_ROOT)):
-        candidato = (base / rel).resolve()
-        if candidato.is_file() and _sotto_cartella_consentita(candidato):
-            return str(candidato)
-    return None
 
 
 def _prescrizione_del_lotto(db: Session, lotto_id: str, prescrizione_id: str):
@@ -203,8 +156,9 @@ def crea_lotto(
     # simula SharePoint, e traccia il caricamento in CaricamentoFile.
     os.makedirs(UPLOAD_DIR_TEMP, exist_ok=True)
     contenuto_pdf = file_pdf.file.read()
+    salva_pdf_caricato(lotto.id, file_pdf.filename, contenuto_pdf)
     percorso_relativo_pdf = f"{lotto.sp_prescrizioni_path}/{file_pdf.filename}"
-    percorso_assoluto_pdf = os.path.join(FAKE_SP_ROOT, percorso_relativo_pdf)
+    percorso_assoluto_pdf = os.path.join(str(SHAREPOINT_FINTO), percorso_relativo_pdf)
     os.makedirs(os.path.dirname(percorso_assoluto_pdf), exist_ok=True)
     with open(percorso_assoluto_pdf, "wb") as f:
         f.write(contenuto_pdf)
@@ -222,7 +176,7 @@ def crea_lotto(
         if ext_excel.lower() in ESTENSIONI_EXCEL_VALIDE:
             contenuto_excel = file_excel.file.read()
             percorso_relativo_excel = f"{lotto.sp_lavoro_path}/{file_excel.filename}"
-            percorso_assoluto_excel = os.path.join(FAKE_SP_ROOT, percorso_relativo_excel)
+            percorso_assoluto_excel = os.path.join(str(SHAREPOINT_FINTO), percorso_relativo_excel)
             os.makedirs(os.path.dirname(percorso_assoluto_excel), exist_ok=True)
             with open(percorso_assoluto_excel, "wb") as f:
                 f.write(contenuto_excel)
@@ -341,6 +295,15 @@ def correggi_barcode(
     else:
         presc.barcode = nuovo_barcode_pulito
         presc.stato_barcode = StatoBarcode.corretto_manuale
+        if era_undefined and presc.sp_pdf_path:
+            vecchio_stem = Path(presc.sp_pdf_path.replace("\\", "/")).stem
+            rinomina_pagina_media(presc.lotto_id, vecchio_stem, nuovo_barcode_pulito)
+            pdf_media = cartella_pagine_lotto(presc.lotto_id) / f"{nuovo_barcode_pulito}.pdf"
+            if pdf_media.is_file():
+                presc.sp_pdf_path = relativo_a_radice(pdf_media)
+            png_media = cartella_pagine_lotto(presc.lotto_id) / f"{nuovo_barcode_pulito}.png"
+            if png_media.is_file():
+                presc.sp_png_path = relativo_a_radice(png_media)
 
     presc.barcode_corretto_da_id = utente.id
     presc.barcode_corretto_at = datetime.utcnow()
@@ -378,36 +341,6 @@ def escludi_pagina_non_fronte(
     return RedirectResponse(url=f"/lotti/{lotto_id}?fase=3", status_code=302)
 
 
-def _sniff_tipo_file(percorso: str):
-    try:
-        with open(percorso, "rb") as handle:
-            testa = handle.read(8)
-    except OSError:
-        return None
-    if testa.startswith(b"%PDF"):
-        return "pdf"
-    if testa.startswith(b"\x89PNG"):
-        return "png"
-    if testa[:2] == b"\xff\xd8":
-        return "jpeg"
-    return "altro"
-
-
-def _risolvi_anteprima(presc: Prescrizione):
-    pdf = _percorso_pdf_prescrizione(presc)
-    if pdf:
-        tipo = _sniff_tipo_file(pdf)
-        if tipo == "pdf":
-            return pdf, "pdf"
-        if tipo in ("png", "jpeg"):
-            return pdf, tipo
-    png = _percorso_png_prescrizione(presc)
-    if png:
-        tipo = _sniff_tipo_file(png) or "png"
-        return png, tipo
-    return None, None
-
-
 @router.get("/lotti/{lotto_id}/prescrizioni/{prescrizione_id}/pdf")
 def visualizza_pdf_prescrizione(
     lotto_id: str, prescrizione_id: str,
@@ -430,11 +363,10 @@ def visualizza_pdf_prescrizione(
         "png": "image/png",
         "jpeg": "image/jpeg",
     }.get(tipo, "application/octet-stream")
-    nome = os.path.basename(percorso)
     return FileResponse(
         percorso,
         media_type=mime,
-        headers={"Content-Disposition": f'inline; filename="{nome}"'},
+        headers={"Content-Disposition": "inline"},
     )
 
 
@@ -651,7 +583,7 @@ def completa_lotto(
                 tot = p.dati_ocr.totale_prescrizione if (p.dati_ocr and p.dati_ocr.totale_prescrizione) else 100.0
                 ws.append([p.barcode, nf, cf, ce, ff, tot])
                 
-            percorso_dir = os.path.join(FAKE_SP_ROOT, PERCORSO_CARTELLA_OUTPUT_RECENTI)
+            percorso_dir = os.path.join(str(SHAREPOINT_FINTO), PERCORSO_CARTELLA_OUTPUT_RECENTI)
             os.makedirs(percorso_dir, exist_ok=True)
             wb.save(os.path.join(percorso_dir, nome_file))
             
@@ -673,7 +605,7 @@ def export_zip(
     if lotto.stato != StatoLotto.completato and lotto.stato != StatoLotto.archiviato:
         return JSONResponse({"errore": "Il lotto deve essere completato per esportare lo ZIP"}, status_code=400)
 
-    percorso_excel = os.path.join(FAKE_SP_ROOT, "LAVORO/OUTPUT", lotto.excel_output_filename)
+    percorso_excel = os.path.join(str(SHAREPOINT_FINTO), "LAVORO/OUTPUT", lotto.excel_output_filename)
     if not os.path.exists(percorso_excel):
         return JSONResponse({"errore": f"File Excel principale non trovato a {percorso_excel}"}, status_code=404)
 
@@ -851,8 +783,8 @@ def visualizza_output_excel(
     if lotto is None or not lotto.excel_output_filename:
         return JSONResponse({"errore": "Excel di output non ancora disponibile per questo lotto"}, status_code=404)
 
-    radice = os.path.normpath(FAKE_SP_ROOT)
-    percorso = os.path.normpath(os.path.join(FAKE_SP_ROOT, PERCORSO_CARTELLA_OUTPUT_RECENTI, lotto.excel_output_filename))
+    radice = os.path.normpath(str(SHAREPOINT_FINTO))
+    percorso = os.path.normpath(os.path.join(str(SHAREPOINT_FINTO), PERCORSO_CARTELLA_OUTPUT_RECENTI, lotto.excel_output_filename))
     if not percorso.startswith(radice + os.sep) or not os.path.isfile(percorso):
         return JSONResponse({"errore": "File Excel non trovato"}, status_code=404)
 
