@@ -649,6 +649,7 @@ def scrivi_excel_finale_reale(lotto_id) -> bool:
         cartella_output_permanente.mkdir(parents=True, exist_ok=True)
         destinazione = cartella_output_permanente / file_excel_finale.name
         shutil.copy2(file_excel_finale, destinazione)
+        pubblica_file(lotto.id, destinazione)
 
         lotto.excel_output_filename = file_excel_finale.name
         elaborazione.stato = StatoElaborazione.completata

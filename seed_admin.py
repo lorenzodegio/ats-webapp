@@ -25,8 +25,8 @@ CONFIGURAZIONE_INIZIALE = [
     ("docker_project_path", "~/ocr-cannabis", "Percorso del progetto Docker della pipeline OCR"),
     ("ollama_host", "http://localhost:11434", "Host del servizio Ollama per il VLLM"),
     ("ocr_score_soglia", "80", "Soglia minima di score OCR considerata accettabile"),
-    ("pipeline_backend", "finto",
-     "'finto' = simulazione senza Docker (default, sviluppo frontend) | 'reale' = container Docker veri"),
+    ("pipeline_backend", "reale",
+     "Pipeline OCR Docker reale (Ollama/Qwen). Il backend finto non e' piu' usato."),
 ]
 
 MESI_IT = ["", "GENNAIO", "FEBBRAIO", "MARZO", "APRILE", "MAGGIO", "GIUGNO",
@@ -65,6 +65,12 @@ def crea_utenti(db):
 
 
 def crea_configurazione(db, admin):
+    riga_backend = db.query(Configurazione).filter(Configurazione.chiave == "pipeline_backend").first()
+    if riga_backend is not None and riga_backend.valore != "reale":
+        riga_backend.valore = "reale"
+        riga_backend.descrizione = "Pipeline OCR Docker reale (Ollama/Qwen)"
+        db.commit()
+        print("pipeline_backend aggiornato a 'reale'.")
     if db.query(Configurazione).count() > 0:
         print("Configurazione gia' presente, salto.")
         return

@@ -16,6 +16,7 @@ if (Path("/workspace") / "app" / "main.py").is_file():
 MEDIA_ROOT = RADICE_PROGETTO / "media"
 DATI_DIR = RADICE_PROGETTO / "dati"
 SHAREPOINT_FINTO = RADICE_PROGETTO / "sharepoint_finto"
+PERCORSO_CARTELLA_OUTPUT_RECENTI = "ARCHIVIO/ELABORAZIONI RECENTI"
 
 RICETTE_RAW = DATI_DIR / "ricette_raw"
 RICETTE_STAGING_IMAGES = DATI_DIR / "ricette_staging" / "images"

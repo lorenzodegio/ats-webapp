@@ -25,16 +25,11 @@ from app.models import (
     StatoElaborazione, FaseElaborazione, Utente, StatoRevisionePrescrizione, DatiOcr,
     GravitaDifformita,
 )
-from app.fake_pipeline import (
-    avvia_preprocessing_fake, avvia_ocr_fake, avvia_difformita_fake,
-    PERCORSO_CARTELLA_OUTPUT_RECENTI,
-)
 from app.storage import (
     SHAREPOINT_FINTO,
-    cartella_pagine_lotto,
+    PERCORSO_CARTELLA_OUTPUT_RECENTI,
+    MEDIA_ROOT,
     percorso_pdf_prescrizione as _percorso_pdf_prescrizione,
-    relativo_a_radice,
-    rinomina_pagina_media,
     risolvi_anteprima as _risolvi_anteprima,
     salva_pdf_caricato,
 )
@@ -43,7 +38,6 @@ from app.real_pipeline import (
     correggi_barcode_reale, scrivi_excel_finale_reale, esiste_lotto_in_esecuzione,
     metti_in_pausa_container, riprendi_container, annulla_container,
 )
-from app.config_helper import backend_pipeline_e_reale
 from app.progresso import (
     percentuale_avanzamento, etichetta_stato, ETICHETTE_STATO,
     estrai_progresso_da_log, messaggio_fase_operatore,
@@ -62,8 +56,16 @@ MESI_IT = ["", "GENNAIO", "FEBBRAIO", "MARZO", "APRILE", "MAGGIO", "GIUGNO",
            "LUGLIO", "AGOSTO", "SETTEMBRE", "OTTOBRE", "NOVEMBRE", "DICEMBRE"]
 
 
+def _url_dettaglio_lotto(lotto_id, lotto=None, fase=None) -> str:
+    if fase is None and lotto is not None:
+        fase = indice_fase_wizard(lotto.stato, lotto)
+    if fase is None:
+        fase = 3
+    return f"/lotti/{lotto_id}?fase={fase}"
+
+
 def _fase_vista_da_query(request: Request, lotto: LottoMensile) -> int:
-    corrente = indice_fase_wizard(lotto.stato)
+    corrente = indice_fase_wizard(lotto.stato, lotto)
     grezzo = request.query_params.get("fase")
     if grezzo is None:
         return corrente
@@ -125,7 +127,7 @@ def crea_lotto(
     if ext_pdf.lower() not in ESTENSIONI_PDF_VALIDE:
         return RedirectResponse(url="/lotti/nuovo?errore=Il+file+prescrizioni+deve+essere+un+PDF", status_code=302)
 
-    if backend_pipeline_e_reale(db) and esiste_lotto_in_esecuzione(db):
+    if esiste_lotto_in_esecuzione(db):
         return RedirectResponse(
             url="/lotti/nuovo?errore=Un%27altra+elaborazione+Docker+e%27+gia%27+in+corso,+attendi+che+finisca",
             status_code=302,
@@ -191,13 +193,9 @@ def crea_lotto(
 
     db.commit()
 
-    # "attesa sync OneDrive" simulata: passiamo subito a preprocessing
-    if backend_pipeline_e_reale(db):
-        background_tasks.add_task(avvia_preprocessing_reale, lotto.id)
-    else:
-        background_tasks.add_task(avvia_preprocessing_fake, lotto.id)
+    background_tasks.add_task(avvia_preprocessing_reale, lotto.id)
 
-    return RedirectResponse(url=f"/lotti/{lotto.id}", status_code=302)
+    return RedirectResponse(url=_url_dettaglio_lotto(lotto.id, fase=3), status_code=302)
 
 
 # ============================================================
@@ -263,7 +261,7 @@ def dettaglio_lotto(
                 elaborazione_attiva.fase if elaborazione_attiva else None,
                 in_pausa,
             ),
-            "fase_corrente": indice_fase_wizard(lotto.stato),
+            "fase_corrente": indice_fase_wizard(lotto.stato, lotto),
             "fase_wizard": _fase_vista_da_query(request, lotto),
             "fasi_wizard": FASI_WIZARD_LOTTO,
         },
@@ -287,23 +285,12 @@ def correggi_barcode(
     era_undefined = presc.stato_barcode == StatoBarcode.undefined
     nuovo_barcode_pulito = nuovo_barcode.strip()
 
-    if backend_pipeline_e_reale(db) and era_undefined:
-        # Sposta per davvero il file da staging a ./dati/ricette/{barcode}.pdf,
-        # altrimenti la fase OCR successiva non lo troverebbe.
+    if era_undefined:
         correggi_barcode_reale(presc.id, nuovo_barcode_pulito)
         db.refresh(presc)
     else:
         presc.barcode = nuovo_barcode_pulito
         presc.stato_barcode = StatoBarcode.corretto_manuale
-        if era_undefined and presc.sp_pdf_path:
-            vecchio_stem = Path(presc.sp_pdf_path.replace("\\", "/")).stem
-            rinomina_pagina_media(presc.lotto_id, vecchio_stem, nuovo_barcode_pulito)
-            pdf_media = cartella_pagine_lotto(presc.lotto_id) / f"{nuovo_barcode_pulito}.pdf"
-            if pdf_media.is_file():
-                presc.sp_pdf_path = relativo_a_radice(pdf_media)
-            png_media = cartella_pagine_lotto(presc.lotto_id) / f"{nuovo_barcode_pulito}.png"
-            if png_media.is_file():
-                presc.sp_png_path = relativo_a_radice(png_media)
 
     presc.barcode_corretto_da_id = utente.id
     presc.barcode_corretto_at = datetime.utcnow()
@@ -402,8 +389,8 @@ def _ctx_revisione(request, utente, lotto, presc, modo):
     return {
         "request": request, "utente": utente, "voce_attiva": "elaborazioni",
         "lotto": lotto, "presc": presc, "modo": modo,
-        "fase_corrente": indice_fase_wizard(lotto.stato),
-        "fase_wizard": {"barcode": 3, "ocr": 4, "difformita": 5}.get(modo, indice_fase_wizard(lotto.stato)),
+        "fase_corrente": indice_fase_wizard(lotto.stato, lotto),
+        "fase_wizard": {"barcode": 3, "ocr": 4, "difformita": 5}.get(modo, indice_fase_wizard(lotto.stato, lotto)),
         "fasi_wizard": FASI_WIZARD_LOTTO,
         "etichette_ocr": ETICHETTE_CAMPO_OCR,
         "campi_booleani": ("timbro_medico", "firma_medico"),
@@ -475,11 +462,11 @@ def avvia_ocr(
 ):
     lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
     if lotto and lotto.stato == StatoLotto.revisione_barcode and (lotto.n_barcode_undefined or 0) == 0:
-        if backend_pipeline_e_reale(db):
-            background_tasks.add_task(avvia_ocr_reale, lotto.id)
-        else:
-            background_tasks.add_task(avvia_ocr_fake, lotto.id)
-    return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+        lotto.stato = StatoLotto.elaborazione_ocr
+        db.commit()
+        background_tasks.add_task(avvia_ocr_reale, lotto.id)
+        return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=4), status_code=302)
+    return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, lotto), status_code=302)
 
 
 @router.post("/lotti/{lotto_id}/avvia-difformita")
@@ -489,11 +476,11 @@ def avvia_difformita(
 ):
     lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
     if lotto and lotto.stato == StatoLotto.revisione_qualita:
-        if backend_pipeline_e_reale(db):
-            background_tasks.add_task(avvia_difformita_reale, lotto.id)
-        else:
-            background_tasks.add_task(avvia_difformita_fake, lotto.id)
-    return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+        lotto.stato = StatoLotto.analisi_difformita
+        db.commit()
+        background_tasks.add_task(avvia_difformita_reale, lotto.id)
+        return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=5), status_code=302)
+    return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, lotto), status_code=302)
 
 
 @router.post("/lotti/{lotto_id}/difformita/{difformita_id}/{azione}")
@@ -513,7 +500,7 @@ def gestisci_difformita(
         db.commit()
     if next.startswith(f"/lotti/{lotto_id}/"):
         return RedirectResponse(url=next, status_code=302)
-    return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+    return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=5), status_code=302)
 
 
 COLONNE_DATI_OCR = [
@@ -558,39 +545,16 @@ def completa_lotto(
 ):
     lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
     if lotto and lotto.stato == StatoLotto.revisione_difformita:
-        if backend_pipeline_e_reale(db):
-            successo = scrivi_excel_finale_reale(lotto.id)
-            if not successo:
-                return RedirectResponse(
-                    url=f"/lotti/{lotto_id}?errore=Scrittura+Excel+finale+fallita,+vedi+i+log", status_code=302
-                )
-            db.refresh(lotto)
-        else:
-            nome_file = f"OUTPUT_CANNABIS_{lotto.nome}.xlsx"
-            lotto.excel_output_filename = nome_file
-            
-            from openpyxl import Workbook
-            wb = Workbook()
-            ws = wb.active
-            
-            headers = ["BARCODE", "nome_farmacia", "codice_fiscale", "codice_esenzione", "forma_farmaceutica", "totale_prescrizione"]
-            ws.append(headers)
-            for p in lotto.prescrizioni:
-                nf = p.dati_ocr.nome_farmacia if (p.dati_ocr and p.dati_ocr.nome_farmacia) else "FARMACIA DI PROVA"
-                cf = p.dati_ocr.codice_fiscale if (p.dati_ocr and p.dati_ocr.codice_fiscale) else "RSSMRA80A01H501U"
-                ce = p.dati_ocr.codice_esenzione if (p.dati_ocr and p.dati_ocr.codice_esenzione) else "048"
-                ff = p.dati_ocr.forma_farmaceutica if (p.dati_ocr and p.dati_ocr.forma_farmaceutica) else "olio in flacone"
-                tot = p.dati_ocr.totale_prescrizione if (p.dati_ocr and p.dati_ocr.totale_prescrizione) else 100.0
-                ws.append([p.barcode, nf, cf, ce, ff, tot])
-                
-            percorso_dir = os.path.join(str(SHAREPOINT_FINTO), PERCORSO_CARTELLA_OUTPUT_RECENTI)
-            os.makedirs(percorso_dir, exist_ok=True)
-            wb.save(os.path.join(percorso_dir, nome_file))
-            
+        successo = scrivi_excel_finale_reale(lotto.id)
+        if not successo:
+            return RedirectResponse(
+                url=f"/lotti/{lotto_id}?errore=Scrittura+Excel+finale+fallita,+vedi+i+log", status_code=302
+            )
+        db.refresh(lotto)
         lotto.stato = StatoLotto.completato
         lotto.completato_at = datetime.utcnow()
         db.commit()
-    return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+    return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=6), status_code=302)
 
 
 @router.get("/lotti/{lotto_id}/export-zip")
@@ -783,13 +747,29 @@ def visualizza_output_excel(
     if lotto is None or not lotto.excel_output_filename:
         return JSONResponse({"errore": "Excel di output non ancora disponibile per questo lotto"}, status_code=404)
 
-    radice = os.path.normpath(str(SHAREPOINT_FINTO))
-    percorso = os.path.normpath(os.path.join(str(SHAREPOINT_FINTO), PERCORSO_CARTELLA_OUTPUT_RECENTI, lotto.excel_output_filename))
-    if not percorso.startswith(radice + os.sep) or not os.path.isfile(percorso):
+    candidati = []
+    if lotto.sp_output_path:
+        candidati.append(SHAREPOINT_FINTO / lotto.sp_output_path / lotto.excel_output_filename)
+    candidati.append(SHAREPOINT_FINTO / PERCORSO_CARTELLA_OUTPUT_RECENTI / lotto.excel_output_filename)
+    candidati.append(SHAREPOINT_FINTO / "LAVORO" / "OUTPUT" / lotto.excel_output_filename)
+    candidati.append(MEDIA_ROOT / "lotti" / str(lotto.id) / "pagine" / lotto.excel_output_filename)
+    percorso = None
+    radici = (SHAREPOINT_FINTO.resolve(), MEDIA_ROOT.resolve())
+    for candidato in candidati:
+        try:
+            risolto = candidato.resolve()
+            if not any(True for r in radici if str(risolto).startswith(str(r))):
+                continue
+        except (ValueError, OSError):
+            continue
+        if risolto.is_file():
+            percorso = risolto
+            break
+    if percorso is None:
         return JSONResponse({"errore": "File Excel non trovato"}, status_code=404)
 
     return FileResponse(
-        percorso,
+        str(percorso),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=lotto.excel_output_filename
     )
@@ -807,7 +787,7 @@ def archivia_lotto(
             "ARCHIVIO/ELABORAZIONI RECENTI", "ARCHIVIO/ELABORAZIONI PASSATE"
         )
         db.commit()
-    return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+    return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=6), status_code=302)
 
 
 # ============================================================
@@ -823,9 +803,9 @@ def metti_in_pausa(
     if elaborazione and elaborazione.stato == StatoElaborazione.in_corso:
         elaborazione.richiesta_controllo = "pausa"
         db.commit()
-        if backend_pipeline_e_reale(db) and elaborazione.nome_container:
+        if elaborazione.nome_container:
             metti_in_pausa_container(elaborazione.nome_container)
-    return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+    return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, lotto), status_code=302)
 
 
 @router.post("/lotti/{lotto_id}/elaborazione/riprendi")
@@ -835,11 +815,11 @@ def riprendi(
     lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
     elaborazione = lotto.elaborazione_attiva if lotto else None
     if elaborazione and elaborazione.richiesta_controllo == "pausa":
-        if backend_pipeline_e_reale(db) and elaborazione.nome_container:
+        if elaborazione.nome_container:
             riprendi_container(elaborazione.nome_container)
         elaborazione.richiesta_controllo = None
         db.commit()
-    return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+    return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, lotto), status_code=302)
 
 
 @router.post("/lotti/{lotto_id}/elaborazione/annulla")
@@ -851,12 +831,10 @@ def annulla(
     if elaborazione and elaborazione.stato == StatoElaborazione.in_corso:
         elaborazione.richiesta_controllo = "annulla"
         db.commit()
-        if backend_pipeline_e_reale(db) and elaborazione.nome_container:
-            # Se era in pausa, un container congelato non riceve il kill finche'
-            # non viene ripreso: lo riprendo un istante prima di ucciderlo.
+        if elaborazione.nome_container:
             riprendi_container(elaborazione.nome_container)
             annulla_container(elaborazione.nome_container)
-    return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+    return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, lotto), status_code=302)
 
 
 @router.post("/lotti/{lotto_id}/riprova")
@@ -877,7 +855,7 @@ def riprova_lotto(
     """
     lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
     if lotto is None or lotto.stato != StatoLotto.eccezione:
-        return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+        return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, lotto), status_code=302)
 
     ultima_fallita = (
         db.query(Elaborazione)
@@ -892,14 +870,15 @@ def riprova_lotto(
     if fase == FaseElaborazione.preprocessing:
         for p in list(lotto.prescrizioni):
             db.delete(p)
-        lotto.stato = StatoLotto.caricamento
+        lotto.stato = StatoLotto.preprocessing
         lotto.n_prescrizioni_totali = 0
         lotto.n_barcode_letti = 0
         lotto.n_barcode_undefined = 0
         db.commit()
-        background_tasks.add_task(avvia_preprocessing_fake, lotto.id)
+        background_tasks.add_task(avvia_preprocessing_reale, lotto.id)
+        return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=3), status_code=302)
 
-    elif fase == FaseElaborazione.vllm:
+    if fase == FaseElaborazione.vllm:
         for p in lotto.prescrizioni:
             if p.dati_ocr:
                 db.delete(p.dati_ocr)
@@ -908,21 +887,25 @@ def riprova_lotto(
             p.barcode_in_excel = None
             p.riga_excel = None
             p.sp_json_path = None
-        lotto.stato = StatoLotto.revisione_barcode
+        lotto.stato = StatoLotto.elaborazione_ocr
         lotto.score_ocr_medio = None
         lotto.n_match_excel = 0
         db.commit()
-        background_tasks.add_task(avvia_ocr_fake, lotto.id)
+        background_tasks.add_task(avvia_ocr_reale, lotto.id)
+        return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=4), status_code=302)
 
-    elif fase == FaseElaborazione.difformita:
-        for d in list(lotto.difformita):
-            db.delete(d)
-        lotto.stato = StatoLotto.revisione_qualita
+    if fase == FaseElaborazione.difformita:
+        for p in lotto.prescrizioni:
+            for d in list(p.difformita):
+                db.delete(d)
+        lotto.stato = StatoLotto.analisi_difformita
         lotto.n_difformita_totali = 0
         db.commit()
-        background_tasks.add_task(avvia_difformita_fake, lotto.id)
+        background_tasks.add_task(avvia_difformita_reale, lotto.id)
+        return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=5), status_code=302)
+        return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=5), status_code=302)
 
-    return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+    return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, lotto), status_code=302)
 
 
 # ============================================================

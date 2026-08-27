@@ -4,8 +4,9 @@ attraverso il suo ciclo di vita (Sezione "Flusso caricamento -> elaborazione
 -> archiviazione" dello schema). Usato da dashboard e dettaglio lotto.
 """
 import re
+from datetime import datetime
 
-from app.models import StatoLotto
+from app.models import FaseElaborazione, StatoLotto
 
 _PATTERN_PROGRESSO = re.compile(r"\[(\d+)/(\d+)\]")
 
@@ -79,8 +80,39 @@ FASI_WIZARD_LOTTO = [
 ]
 
 
-def indice_fase_wizard(stato: StatoLotto) -> int:
+_FASE_ELAB_TO_WIZARD = {
+    FaseElaborazione.preprocessing: 3,
+    FaseElaborazione.vllm: 4,
+    FaseElaborazione.difformita: 5,
+    FaseElaborazione.completa: 6,
+}
+
+
+def _indice_da_elaborazioni(lotto) -> int:
+    elabs = list(getattr(lotto, "elaborazioni", None) or [])
+    if not elabs:
+        return 0
+    ultima = max(
+        elabs,
+        key=lambda e: (e.started_at or e.finished_at or datetime.min, str(getattr(e, "id", ""))),
+    )
+    return _FASE_ELAB_TO_WIZARD.get(ultima.fase, 0)
+
+
+def indice_fase_wizard(stato: StatoLotto, lotto=None) -> int:
     """Step visivo 1–6 del lotto in elaborazione (dopo la creazione)."""
+    if stato == StatoLotto.eccezione:
+        idx = _indice_da_elaborazioni(lotto)
+        if idx:
+            return idx
+        note = (getattr(lotto, "note", None) or "").lower()
+        if "ocr" in note or "vllm" in note:
+            return 4
+        if "difform" in note:
+            return 5
+        if "excel" in note or "output" in note or "cartell" in note:
+            return 6
+        return 3
     if stato in (StatoLotto.bozza, StatoLotto.caricamento):
         return 2
     if stato in (StatoLotto.preprocessing, StatoLotto.revisione_barcode):
