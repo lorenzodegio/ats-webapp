@@ -53,6 +53,13 @@ except ImportError:
     OLLAMA_DISPONIBILE = False
     logger.warning("Libreria ollama non disponibile — check semantici disabilitati")
 
+try:
+    import farmacie_dizionario
+    FARMACIE_DIZIONARIO_DISPONIBILE = True
+except ImportError:
+    FARMACIE_DIZIONARIO_DISPONIBILE = False
+    logger.warning("farmacie_dizionario.py non disponibile — matching farmacie da DB disabilitato")
+
 
 # ─── Costanti di dominio ────────────────────────────────────────────────────────
 
@@ -945,6 +952,20 @@ DESCRIZIONI_DIFFORMITA = {
 }
 
 
+def _normalizza_nome_farmacia_riga(r: dict) -> dict:
+    """Post-processing deterministico: allinea nome_farmacia all'elenco censito."""
+    if not FARMACIE_DIZIONARIO_DISPONIBILE:
+        return r
+    letto = str(r.get("nome_farmacia", "") or "").strip()
+    if not letto:
+        return r
+    canonico, _codice = farmacie_dizionario.normalizza_nome_farmacia(letto)
+    if canonico != letto:
+        logger.info(f"  nome_farmacia: '{letto}' normalizzata in '{canonico}'")
+        r["nome_farmacia"] = canonico
+    return r
+
+
 def analizza_riga(r: dict) -> list[str]:
     """
     Analizza una singola ricetta (dizionario JSON estratto da ocr_cannabis.py)
@@ -1087,7 +1108,10 @@ def run(input_dir: Path, output_dir: Path):
     n_difformi = 0
 
     for idx, row in df_ocr.iterrows():
-        diffs = analizza_riga(row.to_dict())
+        riga = _normalizza_nome_farmacia_riga(row.to_dict())
+        if "nome_farmacia" in df.columns:
+            df.at[idx, "nome_farmacia"] = riga.get("nome_farmacia", "")
+        diffs = analizza_riga(riga)
         df.at[idx, "Difformità"] = ", ".join(diffs) if diffs else ""
         if diffs:
             n_difformi += 1
@@ -1150,6 +1174,8 @@ def elabora_cartella(cartella: Path):
             try:
                 dati = json.loads(json_path.read_text(encoding="utf-8-sig"))
                 logger.info(f"--- {json_path.name} ---")
+                dati = _normalizza_nome_farmacia_riga(dati)
+                json_path.write_text(json.dumps(dati, ensure_ascii=False, indent=2), encoding="utf-8")
                 diffs = analizza_riga(dati)
                 risultati[json_path.name] = diffs
                 salva_difformita_json(json_path, diffs)

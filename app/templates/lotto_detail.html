@@ -15,10 +15,31 @@
   <div>{% include "_badge_stato.html" %}</div>
 </div>
 
+{% if lotto.stato.value not in ["completato", "archiviato", "eccezione"] %}
+<div class="wizard-steps" style="margin-bottom: 24px;">
+  <div class="wizard-step wizard-step--completato">
+    <span class="wizard-step__numero">1</span>Dati lotto
+  </div>
+  <div class="wizard-step wizard-step--completato">
+    <span class="wizard-step__numero">2</span>Caricamento
+  </div>
+  <div class="wizard-step wizard-step--completato">
+    <span class="wizard-step__numero">3</span>Conferma
+  </div>
+  <div class="wizard-step wizard-step--attivo">
+    <span class="wizard-step__numero">4</span>Monitoraggio
+  </div>
+</div>
+{% endif %}
+
 {% if lotto.stato.value == "eccezione" %}
-<div class="errore-form">
-  <strong>Lotto interrotto in eccezione.</strong><br>
-  {{ lotto.note or "Nessun dettaglio disponibile." }}
+<div class="errore-form errore-form--lotto">
+  <div class="errore-form__titolo">⚠ Elaborazione interrotta</div>
+  <div class="errore-form__corpo">{{ lotto.note or "Si è verificato un problema durante l'elaborazione, ma non è stato salvato alcun dettaglio." }}</div>
+  <div class="errore-form__meta">Rilevato il {{ lotto.updated_at.strftime("%d/%m/%Y alle %H:%M") if lotto.updated_at else '—' }}</div>
+  <form method="post" action="/lotti/{{ lotto.id }}/riprova" style="margin-top:14px;">
+    <button type="submit" class="btn btn--primario">Riprova</button>
+  </form>
 </div>
 {% endif %}
 
@@ -65,6 +86,20 @@
     <div class="kpi-card__valore">{{ lotto.n_prescrizioni_totali or 0 }}</div>
   </div>
   <div class="kpi-card">
+    <div class="kpi-card__etichetta">Prescrizioni pulite</div>
+    <div class="kpi-card__valore">
+      {% if lotto.n_prescrizioni_totali %}
+        {{ lotto.n_prescrizioni_totali - (lotto.n_prescrizioni_con_difformita or 0) }}
+      {% else %}
+        —
+      {% endif %}
+    </div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-card__etichetta">Con difformità</div>
+    <div class="kpi-card__valore">{{ lotto.n_prescrizioni_con_difformita or 0 }}</div>
+  </div>
+  <div class="kpi-card">
     <div class="kpi-card__etichetta">Barcode da rivedere</div>
     <div class="kpi-card__valore">{{ lotto.n_barcode_undefined or 0 }}</div>
   </div>
@@ -73,7 +108,7 @@
     <div class="kpi-card__valore">{{ lotto.score_ocr_medio or "—" }}</div>
   </div>
   <div class="kpi-card kpi-card--accento">
-    <div class="kpi-card__etichetta">Difformita rilevate</div>
+    <div class="kpi-card__etichetta">Difformità totali</div>
     <div class="kpi-card__valore">{{ lotto.n_difformita_totali or 0 }}</div>
   </div>
 </div>
@@ -91,7 +126,13 @@
       <tbody>
         {% for p in prescrizioni_undefined %}
         <tr>
-          <td class="mono" style="font-size:12px;">{{ p.sp_pdf_path.split('/')[-1] if p.sp_pdf_path else '—' }}</td>
+          <td class="mono" style="font-size:12px;">
+            {% if p.sp_pdf_path %}
+            <a href="/lotti/{{ lotto.id }}/prescrizioni/{{ p.id }}/pdf" target="_blank" rel="noopener" class="link-barcode" title="Apri la prescrizione in una nuova scheda">{{ p.sp_pdf_path.split('/')[-1] }}<span class="link-barcode__icona" aria-hidden="true">↗</span></a>
+            {% else %}
+            —
+            {% endif %}
+          </td>
           <td colspan="2">
             <form method="post" action="/lotti/{{ lotto.id }}/barcode/{{ p.id }}" style="display:flex; gap:8px;">
               <input type="text" name="nuovo_barcode" placeholder="Barcode corretto" required style="flex:1; padding:8px 10px; border:1px solid var(--border-color); border-radius:8px;">
@@ -119,11 +160,18 @@
     Soglia di qualita: 80/100. Le prescrizioni sotto soglia sono evidenziate.
   </p>
   <table class="tabella">
-    <thead><tr><th>Barcode</th><th>Score OCR</th><th>Campi compilati</th><th>Match Excel</th></tr></thead>
+    <thead><tr><th>Barcode</th><th>Farmacia</th><th>Score OCR</th><th>Campi compilati</th><th>Match Excel</th></tr></thead>
     <tbody>
       {% for p in lotto.prescrizioni %}
       <tr>
-        <td class="mono">{{ p.barcode or '—' }}</td>
+        <td class="mono">
+          {% if p.barcode %}
+          <a href="/lotti/{{ lotto.id }}/prescrizioni/{{ p.id }}/pdf" target="_blank" rel="noopener" class="link-barcode" title="Apri la prescrizione in una nuova scheda">{{ p.barcode }}<span class="link-barcode__icona" aria-hidden="true">↗</span></a>
+          {% else %}
+          —
+          {% endif %}
+        </td>
+        <td>{{ p.dati_ocr.nome_farmacia if p.dati_ocr and p.dati_ocr.nome_farmacia else '—' }}</td>
         <td>
           {% if p.score_ocr and p.score_ocr < 80 %}
             <span class="badge badge--attesa">{{ p.score_ocr }}</span>
@@ -146,16 +194,34 @@
 {# ---------------- Revisione difformita ---------------- #}
 {% if lotto.stato.value == "revisione_difformita" %}
 <div class="card" id="revisione-difformita">
-  <h2 class="card__titolo">Revisione difformita</h2>
+  <h2 class="card__titolo">Revisione difformità</h2>
   {% if difformita_da_gestire %}
-    <table class="tabella">
-      <thead><tr><th>Codice</th><th>Descrizione</th><th>Barcode</th><th>Azione</th></tr></thead>
+    <div class="filtri-riga" style="margin-bottom:16px;">
+      <label for="filtro-gravita" style="font-size:13px; color:var(--text-secondary);">Filtra per gravità:</label>
+      <select id="filtro-gravita" onchange="filtraDifformita(this.value)" style="padding:6px 10px; border:1px solid var(--border-color); border-radius:8px; font-family:var(--font-ui); font-size:13px;">
+        <option value="">Tutte</option>
+        <option value="alta">🔴 Bloccanti</option>
+        <option value="bassa">🟡 Minori</option>
+      </select>
+    </div>
+    <table class="tabella" id="tabella-difformita">
+      <thead><tr><th>Codice</th><th>Gravità</th><th>Descrizione</th><th>Barcode</th><th>Azione</th></tr></thead>
       <tbody>
         {% for d in difformita_da_gestire %}
-        <tr>
+        <tr data-gravita="{{ d.gravita.value }}">
           <td class="mono">{{ d.codice }}</td>
+          <td>
+            <span class="pallino-gravita pallino-gravita--{{ d.gravita.value }}"></span>
+            {% if d.gravita.value == 'alta' %}Bloccante{% elif d.gravita.value == 'media' %}Media{% else %}Minore{% endif %}
+          </td>
           <td>{{ d.descrizione }}</td>
-          <td class="mono">{{ d.prescrizione.barcode if d.prescrizione else '—' }}</td>
+          <td class="mono">
+            {% if d.prescrizione and d.prescrizione.barcode %}
+            <a href="/lotti/{{ lotto.id }}/prescrizioni/{{ d.prescrizione.id }}/pdf" target="_blank" rel="noopener" class="link-barcode" title="Apri la prescrizione in una nuova scheda">{{ d.prescrizione.barcode }}<span class="link-barcode__icona" aria-hidden="true">↗</span></a>
+            {% else %}
+            —
+            {% endif %}
+          </td>
           <td style="display:flex; gap:8px;">
             <form method="post" action="/lotti/{{ lotto.id }}/difformita/{{ d.id }}/conferma">
               <button type="submit" class="btn btn--secondario">Conferma</button>
@@ -169,7 +235,7 @@
       </tbody>
     </table>
   {% else %}
-    <div class="stato-vuoto">Tutte le difformita sono state gestite.</div>
+    <div class="stato-vuoto">Tutte le difformità sono state gestite.</div>
     <form method="post" action="/lotti/{{ lotto.id }}/completa" style="margin-top:16px;">
       <button type="submit" class="btn btn--primario">Completa lotto &rarr;</button>
     </form>
@@ -182,6 +248,12 @@
 <div class="card">
   <h2 class="card__titolo">Lotto completato</h2>
   <p style="font-size:14px;">Tutte le fasi sono concluse. Archivia il lotto per spostarlo in <span class="mono">ARCHIVIO/ELABORAZIONI PASSATE</span>.</p>
+  {% if lotto.excel_output_filename %}
+  <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px;">
+    <a href="/lotti/{{ lotto.id }}/output-excel" target="_blank" rel="noopener" class="btn btn--primario">📊 Apri file Excel</a>
+    <a href="/lotti/{{ lotto.id }}/export-zip" class="btn btn--secondario">📦 Esporta ZIP Farmacie</a>
+  </div>
+  {% endif %}
   <form method="post" action="/lotti/{{ lotto.id }}/archivia">
     <button type="submit" class="btn btn--primario">Archivia lotto</button>
   </form>
@@ -191,6 +263,12 @@
   <h2 class="card__titolo">Lotto archiviato</h2>
   <p style="font-size:14px;">Archiviato il {{ lotto.archiviato_at.strftime("%d/%m/%Y %H:%M") if lotto.archiviato_at else '—' }}.</p>
   <p class="mono" style="font-size:12px; color: var(--text-secondary);">{{ lotto.sp_archivio_path }}</p>
+  {% if lotto.excel_output_filename %}
+  <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
+    <a href="/lotti/{{ lotto.id }}/output-excel" target="_blank" rel="noopener" class="btn btn--secondario">📊 Apri file Excel</a>
+    <a href="/lotti/{{ lotto.id }}/export-zip" class="btn btn--secondario">📦 Esporta ZIP Farmacie</a>
+  </div>
+  {% endif %}
 </div>
 {% endif %}
 
@@ -199,14 +277,36 @@
   <h2 class="card__titolo">Tutte le prescrizioni ({{ lotto.prescrizioni | length }})</h2>
   {% if lotto.prescrizioni %}
   <table class="tabella">
-    <thead><tr><th>Barcode</th><th>Stato barcode</th><th>Score OCR</th><th>Difformita</th></tr></thead>
+    <thead><tr><th>Barcode</th><th>Farmacia</th><th>Stato barcode</th><th>Score OCR</th><th>Difformità</th><th>OCR</th></tr></thead>
     <tbody>
       {% for p in lotto.prescrizioni %}
       <tr>
-        <td class="mono">{{ p.barcode or '—' }}</td>
+        <td class="mono">
+          {% if p.barcode %}
+          <a href="/lotti/{{ lotto.id }}/prescrizioni/{{ p.id }}/pdf" target="_blank" rel="noopener" class="link-barcode" title="Apri la prescrizione in una nuova scheda">{{ p.barcode }}<span class="link-barcode__icona" aria-hidden="true">↗</span></a>
+          {% else %}
+          —
+          {% endif %}
+        </td>
+        <td>{{ p.dati_ocr.nome_farmacia if p.dati_ocr and p.dati_ocr.nome_farmacia else '—' }}</td>
         <td class="mono" style="font-size:12px;">{{ p.stato_barcode.value.replace('_', ' ') }}</td>
-        <td>{{ p.score_ocr or '—' }}</td>
+        <td>
+          {% if p.score_ocr and p.score_ocr < 80 %}
+            <span class="badge badge--attesa">{{ p.score_ocr }}</span>
+          {% else %}
+            {{ p.score_ocr or '—' }}
+          {% endif %}
+        </td>
         <td>{{ p.difformita | length }}</td>
+        <td>
+          {% if p.dati_ocr %}
+          <button class="btn btn--secondario" style="font-size:12px; padding:5px 10px;"
+            onclick="apriModalOcr('{{ lotto.id }}', '{{ p.id }}', '{{ p.barcode or "—" }}')"
+            title="Visualizza e correggi i dati OCR estratti">✏ OCR</button>
+          {% else %}
+          <span style="color:var(--text-secondary); font-size:12px;">—</span>
+          {% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>
@@ -214,6 +314,33 @@
   {% else %}
   <div class="stato-vuoto">Preprocessing non ancora completato.</div>
   {% endif %}
+</div>
+
+{# ---------------- Modal confronto/correzione OCR ---------------- #}
+<div id="modal-ocr" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:1000; padding:20px; overflow-y:auto;">
+  <div style="background:#fff; border-radius:16px; max-width:1000px; margin:auto; padding:32px; position:relative; box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <button onclick="chiudiModalOcr()" style="position:absolute; top:16px; right:16px; background:none; border:none; font-size:22px; cursor:pointer; color:var(--text-secondary);">&times;</button>
+    <h2 style="margin:0 0 4px; font-size:18px;">Dati OCR — <span id="modal-ocr-barcode" class="mono"></span></h2>
+    <p style="font-size:13px; color:var(--text-secondary); margin:0 0 24px;">A sinistra: dati grezzi estratti (non modificabili). A destra: dati correnti modificabili.</p>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+      <div>
+        <h3 style="font-size:14px; font-weight:600; margin:0 0 12px; color:var(--forest);">🔍 OCR grezzo (raw)</h3>
+        <div id="modal-ocr-raw" style="font-family:var(--font-mono); font-size:11px; background:var(--forest); color:#CBD8D0; border-radius:8px; padding:16px; max-height:500px; overflow-y:auto; white-space:pre-wrap; word-break:break-all;"></div>
+      </div>
+      <div>
+        <h3 style="font-size:14px; font-weight:600; margin:0 0 12px; color:var(--forest);">✏ Dati correnti (modificabili)</h3>
+        <form id="form-ocr-correggi" style="display:flex; flex-direction:column; gap:0;">
+          <div id="modal-ocr-campi"></div>
+          <div style="margin-top:16px; display:flex; gap:10px;">
+            <button type="submit" class="btn btn--primario" id="btn-salva-ocr">Salva correzioni</button>
+            <button type="button" class="btn btn--secondario" onclick="chiudiModalOcr()">Annulla</button>
+            <a id="modal-ocr-pdf-link" href="#" target="_blank" class="btn btn--secondario" style="margin-left:auto;">📄 Apri PDF</a>
+          </div>
+        </form>
+      </div>
+    </div>
+    <div id="modal-ocr-esito" style="margin-top:12px; font-size:13px; display:none;"></div>
+  </div>
 </div>
 
 <div class="card">
@@ -227,7 +354,13 @@
         <td class="mono">{{ d.codice }}</td>
         <td>{{ d.descrizione }}</td>
         <td class="mono" style="font-size:12px;">{{ d.stato.value.replace('_', ' ') }}</td>
-        <td class="mono">{{ d.prescrizione.barcode if d.prescrizione else '—' }}</td>
+        <td class="mono">
+          {% if d.prescrizione and d.prescrizione.barcode %}
+          <a href="/lotti/{{ lotto.id }}/prescrizioni/{{ d.prescrizione.id }}/pdf" target="_blank" rel="noopener" class="link-barcode" title="Apri la prescrizione in una nuova scheda">{{ d.prescrizione.barcode }}<span class="link-barcode__icona" aria-hidden="true">↗</span></a>
+          {% else %}
+          —
+          {% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>
@@ -239,7 +372,5 @@
 {% endblock %}
 
 {% block script %}
-{% if elaborazione_attiva %}
 <script src="/static/js/polling-lotto-detail.js"></script>
-{% endif %}
 {% endblock %}

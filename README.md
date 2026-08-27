@@ -46,7 +46,6 @@ python reset_db.py
 Cancella `ats_cannabis.db` e richiama `seed_admin.py`. Quando si passera'
 a PostgreSQL in produzione, questo script andra' sostituito da vere
 migrazioni (es. Alembic).
-
 ## Backend finto (mock)
 
 Le fasi automatiche della pipeline (preprocessing, OCR, difformita)
@@ -100,7 +99,7 @@ con Docker configurato.** Punti specifici da controllare:
   cartella `./dati` condivisa) — i lotti in stato `revisione_*` non ne
   risentono, possono coesistere tranquillamente.
 
-
+## Ciclo di vita di un lotto
 
 ```
 bozza -> caricamento -> preprocessing -> revisione_barcode

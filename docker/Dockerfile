@@ -28,6 +28,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY ocr_cannabis.py date_corrector.py merge_regione.py \
      phase5_difformita.py phase4_excel.py phase1_preprocess.py \
      front_detector.py etichetta_presence.py pipeline.py \
+     farmacie_dizionario.py \
      crop_vuoto_v2.png OUTPUT_FLUSSO_CANNABIS_FINALE.xlsx \
      ./
 

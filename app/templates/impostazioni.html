@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% block titolo %}Impostazioni — ATS Cannabis OCR{% endblock %}
+
+{% block contenuto %}
+<div class="main__header">
+  <div>
+    <h1>Impostazioni</h1>
+    <div class="sottotitolo">Censimento farmacie convenzionate e parametri di sistema (solo amministratore)</div>
+  </div>
+</div>
+
+{% if errore %}
+<div class="errore-form">{{ errore }}</div>
+{% endif %}
+{% if ok %}
+<div class="ok-form">Operazione completata ({{ ok }}).</div>
+{% endif %}
+
+<div class="tab-bar" role="tablist">
+  <a href="/impostazioni?tab=farmacie" class="tab-bar__voce {% if tab == 'farmacie' %}tab-bar__voce--attivo{% endif %}">Farmacie</a>
+  <a href="/impostazioni?tab=sistema" class="tab-bar__voce {% if tab == 'sistema' %}tab-bar__voce--attivo{% endif %}">Sistema</a>
+</div>
+
+{% if tab == 'farmacie' %}
+<div class="card">
+  <h2 class="card__titolo">
+    {% if farmacia_in_modifica %}Modifica farmacia {{ farmacia_in_modifica.codice }}{% else %}Nuova farmacia{% endif %}
+  </h2>
+  <form method="post" action="{% if farmacia_in_modifica %}/impostazioni/farmacie/{{ farmacia_in_modifica.id }}/modifica{% else %}/impostazioni/farmacie{% endif %}">
+    <div class="griglia-form">
+      <div class="campo">
+        <label for="codice">Codice interno *</label>
+        <input type="text" id="codice" name="codice" value="{{ form_farmacia.codice }}" required maxlength="20" placeholder="es. FAR001">
+      </div>
+      <div class="campo">
+        <label for="nome">Nome ufficiale *</label>
+        <input type="text" id="nome" name="nome" value="{{ form_farmacia.nome }}" required maxlength="255" placeholder="es. Farmacia Tili Snc">
+      </div>
+      <div class="campo">
+        <label for="codice_regionale">Codice Regione (FARMACIA_ID)</label>
+        <input type="text" id="codice_regionale" name="codice_regionale" value="{{ form_farmacia.codice_regionale }}" maxlength="120" placeholder="es. CO0310 - TILI &amp; C.">
+      </div>
+      <div class="campo">
+        <label for="indirizzo">Indirizzo</label>
+        <input type="text" id="indirizzo" name="indirizzo" value="{{ form_farmacia.indirizzo }}" maxlength="500">
+      </div>
+      <div class="campo">
+        <label for="comune">Comune</label>
+        <input type="text" id="comune" name="comune" value="{{ form_farmacia.comune }}" maxlength="120">
+      </div>
+      <div class="campo">
+        <label for="provincia">Provincia</label>
+        <input type="text" id="provincia" name="provincia" value="{{ form_farmacia.provincia }}" maxlength="5" placeholder="VA">
+      </div>
+      <div class="campo">
+        <label for="telefono">Telefono</label>
+        <input type="text" id="telefono" name="telefono" value="{{ form_farmacia.telefono }}" maxlength="40">
+      </div>
+      <div class="campo">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" value="{{ form_farmacia.email }}" maxlength="255">
+      </div>
+    </div>
+    <div class="campo">
+      <label for="note">Note operative</label>
+      <textarea id="note" name="note" rows="2">{{ form_farmacia.note }}</textarea>
+    </div>
+    {% if farmacia_in_modifica %}
+    <div class="campo">
+      <label>
+        <input type="checkbox" name="attiva" value="1" {% if form_farmacia.attiva %}checked{% endif %}>
+        Farmacia attiva (inclusa nel dizionario OCR e nell'export ZIP)
+      </label>
+    </div>
+    {% endif %}
+    <div class="filtri-riga">
+      <button type="submit" class="btn btn--primario">{% if farmacia_in_modifica %}Salva modifiche{% else %}Aggiungi farmacia{% endif %}</button>
+      {% if farmacia_in_modifica %}
+      <a href="/impostazioni" class="btn btn--secondario">Annulla</a>
+      {% endif %}
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card__titolo" style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+    <span>Elenco farmacie <span class="card__titolo-contatore">({{ farmacie | length }})</span></span>
+    <a href="/impostazioni/farmacie/export-csv" class="btn btn--secondario">Scarica CSV</a>
+  </div>
+  {% if farmacie %}
+  <table class="tabella">
+    <thead>
+      <tr>
+        <th>Codice</th>
+        <th>Nome</th>
+        <th>Codice Regione</th>
+        <th>Comune</th>
+        <th>Contatti</th>
+        <th>Prescrizioni</th>
+        <th>Stato</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for f in farmacie %}
+      <tr>
+        <td class="mono">{{ f.codice }}</td>
+        <td>
+          <strong>{{ f.nome }}</strong>
+          {% if f.indirizzo %}<div class="sottotitolo">{{ f.indirizzo }}</div>{% endif %}
+        </td>
+        <td class="mono">{{ f.codice_regionale or '—' }}</td>
+        <td>{% if f.comune %}{{ f.comune }}{% if f.provincia %} ({{ f.provincia }}){% endif %}{% else %}—{% endif %}</td>
+        <td>
+          {% if f.telefono %}{{ f.telefono }}{% endif %}
+          {% if f.telefono and f.email %}<br>{% endif %}
+          {% if f.email %}{{ f.email }}{% endif %}
+          {% if not f.telefono and not f.email %}—{% endif %}
+        </td>
+        <td class="mono">{{ contatori_prescrizioni.get(f.nome, 0) }}</td>
+        <td>
+          {% if f.attiva %}
+          <span class="badge badge--completato">Attiva</span>
+          {% else %}
+          <span class="badge badge--in-coda">Disattiva</span>
+          {% endif %}
+        </td>
+        <td>
+          <div class="filtri-riga" style="justify-content:flex-end;">
+            <a href="/impostazioni/farmacie/{{ f.id }}/modifica" class="btn btn--secondario" style="padding:6px 10px; font-size:12px;">Modifica</a>
+            {% if f.attiva %}
+            <form method="post" action="/impostazioni/farmacie/{{ f.id }}/disattiva">
+              <button type="submit" class="btn btn--secondario" style="padding:6px 10px; font-size:12px;">Disattiva</button>
+            </form>
+            {% else %}
+            <form method="post" action="/impostazioni/farmacie/{{ f.id }}/riattiva">
+              <button type="submit" class="btn btn--primario" style="padding:6px 10px; font-size:12px;">Riattiva</button>
+            </form>
+            {% endif %}
+            <form method="post" action="/impostazioni/farmacie/{{ f.id }}/elimina" onsubmit="return confirm('Eliminare definitivamente {{ f.nome }}? Preferisci disattivarla se e\' ancora in uso.');">
+              <button type="submit" class="btn btn--pericolo" style="padding:6px 10px; font-size:12px;">Elimina</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="stato-vuoto">Nessuna farmacia censita. Aggiungine una dal form sopra: l'elenco viene iniettato nel prompt OCR e usato per il matching fuzzy.</div>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if tab == 'sistema' %}
+<div class="card">
+  <h2 class="card__titolo">Configurazione di sistema</h2>
+  <p style="font-size:13px; color: var(--text-secondary); margin-top:-8px;">
+    Valori letti dalla tabella Configurazione. La modifica da interfaccia arrivera' in un secondo momento: per ora si interviene dal database o dal seed.
+  </p>
+  {% if configurazioni %}
+  <table class="tabella">
+    <thead>
+      <tr>
+        <th>Chiave</th>
+        <th>Valore</th>
+        <th>Descrizione</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in configurazioni %}
+      <tr>
+        <td class="mono">{{ c.chiave }}</td>
+        <td class="mono" style="font-size:12px; word-break:break-all;">{{ c.valore }}</td>
+        <td>{{ c.descrizione or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="stato-vuoto">Nessuna configurazione in database. Esegui <span class="mono">python seed_admin.py</span>.</div>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}
