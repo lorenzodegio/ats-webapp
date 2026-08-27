@@ -10,8 +10,22 @@ def leggi_configurazione(db: Session, chiave: str, default: str = "") -> str:
 
 
 def backend_pipeline_e_reale(db: Session) -> bool:
-    """
-    True se Configurazione.pipeline_backend == 'reale' (container Docker
-    veri), False (default) se 'finto' (simulazione, nessun Docker richiesto).
-    """
-    return leggi_configurazione(db, "pipeline_backend", "finto") == "reale"
+    """La webapp usa solo la pipeline Docker/Ollama reale."""
+    return True
+
+
+def assicura_pipeline_reale(db: Session) -> None:
+    """Allinea Configurazione.pipeline_backend a 'reale' (DB vecchi avevano 'finto')."""
+    riga = db.query(Configurazione).filter(Configurazione.chiave == "pipeline_backend").first()
+    if riga is None:
+        db.add(Configurazione(
+            chiave="pipeline_backend",
+            valore="reale",
+            descrizione="Pipeline OCR Docker reale (Ollama/Qwen)",
+        ))
+        db.commit()
+        return
+    if riga.valore != "reale":
+        riga.valore = "reale"
+        riga.descrizione = "Pipeline OCR Docker reale (Ollama/Qwen)"
+        db.commit()

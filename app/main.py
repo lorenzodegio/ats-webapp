@@ -12,12 +12,18 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.database import Base, engine
+from app.database import Base, engine, SessionLocal
+from app.config_helper import assicura_pipeline_reale
 from app.auth import RedirectLogin
 from app.routers import auth_router, dashboard, lotti, archivio, impostazioni
 
 # Crea le tabelle se non esistono (per dev; in produzione si userebbe Alembic)
 Base.metadata.create_all(bind=engine)
+_db_avvio = SessionLocal()
+try:
+    assicura_pipeline_reale(_db_avvio)
+finally:
+    _db_avvio.close()
 
 app = FastAPI(title="ATS Gestione Prescrizioni Cannabis")
 
