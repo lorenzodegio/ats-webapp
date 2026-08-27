@@ -22,8 +22,9 @@
 <div class="split-revisione">
   <div class="card split-revisione__pdf">
     <h2 class="card__titolo">PDF originale</h2>
-    {% if presc.sp_pdf_path %}
-    <iframe class="split-revisione__iframe" title="PDF prescrizione" src="/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/pdf"></iframe>
+    {% if presc.sp_pdf_path or presc.sp_png_path %}
+    <iframe class="split-revisione__iframe" title="PDF prescrizione"
+            src="/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/pdf#view=FitH"></iframe>
     {% else %}
     <p class="stato-vuoto">PDF non disponibile.</p>
     {% endif %}
