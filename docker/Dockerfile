@@ -7,16 +7,23 @@
 
 FROM python:3.11-slim
 
+# Ora italiana nei log Python (asctime usa TZ del container).
+ENV TZ=Europe/Rome
+
 # Dipendenze di sistema:
+# - tzdata: fuso Europe/Rome (slim è UTC senza questo pacchetto)
 # - tesseract-ocr + pacchetto lingua italiana: usato da front_detector.py
 # - libzbar0: richiesto da pyzbar (lettura barcode)
 # - libgl1 + libglib2.0-0: richiesti da opencv-python-headless
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    tzdata \
     tesseract-ocr \
     tesseract-ocr-ita \
     libzbar0 \
     libgl1 \
     libglib2.0-0 \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

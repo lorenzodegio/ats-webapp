@@ -24,6 +24,8 @@
 
 FROM python:3.11-slim
 
+ENV TZ=Europe/Rome
+
 # Installazione ufficiale del client Docker (CLI) + plugin compose,
 # dal repository apt di Docker — non il pacchetto generico "docker.io"
 # di Debian (primo tentativo: il binario non finiva in un posto
@@ -34,6 +36,7 @@ FROM python:3.11-slim
 # Debian/Ubuntu — piazza tutto nei percorsi standard tramite apt,
 # niente da indovinare.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    tzdata \
     ca-certificates curl gnupg \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
@@ -42,6 +45,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
        > /etc/apt/sources.list.d/docker.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /tmp/requirements.txt

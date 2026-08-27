@@ -32,6 +32,7 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - TZ=Europe/Rome
       - HOST_PROJECT_ROOT=${HOST_PROJECT_ROOT}
       - POSTGRES_HOST=ats-postgres
     volumes:
@@ -47,6 +48,8 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     command: ["preprocessing"]
+    environment:
+      - TZ=Europe/Rome
     volumes:
       - ./dati:/dati
     networks:
@@ -58,6 +61,7 @@ services:
       dockerfile: docker/Dockerfile
     command: ["ocr"]
     environment:
+      - TZ=Europe/Rome
       - OLLAMA_HOST=http://ats-ollama:11434
       - MODELLO_PESANTE=qwen3-vl:30b-a3b-instruct
       - MODELLO_LEGGERO=qwen3-vl:8b-instruct
@@ -73,6 +77,7 @@ services:
       dockerfile: docker/Dockerfile
     command: ["difformita"]
     environment:
+      - TZ=Europe/Rome
       - OLLAMA_HOST=http://ats-ollama:11434
       - OLLAMA_MODEL_TESTO=qwen3-vl:8b-instruct
     volumes:
@@ -85,6 +90,8 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     command: ["excel"]
+    environment:
+      - TZ=Europe/Rome
     volumes:
       - ./dati:/dati
     networks:
