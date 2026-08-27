@@ -481,12 +481,17 @@ table.tabella tr:last-child td { border-bottom: none; }
   margin-right: 6px;
 }
 
-.wizard-step--attivo {
+.wizard-step--attivo,
+a.wizard-step.wizard-step--attivo {
   background: var(--forest);
   color: #FFFFFF;
   border-color: var(--forest);
 }
-.wizard-step--attivo .wizard-step__numero { background: var(--sage); color: #FFFFFF; }
+.wizard-step--attivo .wizard-step__numero,
+a.wizard-step--attivo .wizard-step__numero {
+  background: var(--sage);
+  color: #FFFFFF;
+}
 
 .wizard-step--completato {
   background: rgba(164, 195, 178, 0.25);
@@ -807,9 +812,17 @@ table.tabella tr:last-child td { border-bottom: none; }
   font-size: 12px;
   padding: 8px 6px;
   text-decoration: none;
-  color: inherit;
   display: block;
   box-sizing: border-box;
+}
+.wizard-steps--fasi a.wizard-step {
+  color: var(--text-secondary);
+}
+.wizard-steps--fasi a.wizard-step--completato {
+  color: #3A5347;
+}
+.wizard-steps--fasi a.wizard-step--attivo {
+  color: #FFFFFF;
 }
 .wizard-steps--fasi a.wizard-step:hover {
   filter: brightness(0.97);

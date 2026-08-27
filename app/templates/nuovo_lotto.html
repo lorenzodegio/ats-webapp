@@ -13,19 +13,13 @@
 <div class="errore-form">{{ request.query_params.get('errore') }}</div>
 {% endif %}
 
-<div class="wizard-steps" id="wizard-steps">
-  <div class="wizard-step wizard-step--attivo" data-step-indicatore="1">
-    <span class="wizard-step__numero">1</span>Dati lotto
+<div class="wizard-steps wizard-steps--fasi" id="wizard-steps">
+  {% for num, etichetta in fasi_wizard %}
+  <div class="wizard-step{% if num == 1 %} wizard-step--attivo{% elif num > 3 %} wizard-step--bloccato{% endif %}"
+       data-step-indicatore="{{ num }}"{% if num > 3 %} title="Disponibile dopo la creazione del lotto"{% endif %}>
+    <span class="wizard-step__numero">{{ num }}</span>{{ etichetta }}
   </div>
-  <div class="wizard-step" data-step-indicatore="2">
-    <span class="wizard-step__numero">2</span>Caricamento
-  </div>
-  <div class="wizard-step" data-step-indicatore="3">
-    <span class="wizard-step__numero">3</span>Conferma
-  </div>
-  <div class="wizard-step" data-step-indicatore="4">
-    <span class="wizard-step__numero">4</span>Monitoraggio
-  </div>
+  {% endfor %}
 </div>
 
 <div class="card">
@@ -79,7 +73,7 @@
       </div>
     </div>
 
-    <!-- Step 3: Conferma -->
+    <!-- Step 3: conferma avvio preprocessing -->
     <div class="wizard-panel" data-step="3">
       <div class="riepilogo-riga">
         <span class="riepilogo-riga__etichetta">Nome lotto</span>

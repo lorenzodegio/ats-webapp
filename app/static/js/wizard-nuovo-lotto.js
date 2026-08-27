@@ -30,11 +30,16 @@
     document.querySelectorAll(".wizard-panel").forEach((pannello) => {
       pannello.classList.toggle("wizard-panel--attivo", Number(pannello.dataset.step) === numero);
     });
-    document.querySelectorAll(".wizard-step").forEach((indicatore) => {
+    document.querySelectorAll("#wizard-steps [data-step-indicatore]").forEach((indicatore) => {
       const n = Number(indicatore.dataset.stepIndicatore);
-      indicatore.classList.remove("wizard-step--attivo", "wizard-step--completato");
-      if (n === numero) indicatore.classList.add("wizard-step--attivo");
-      else if (n < numero) indicatore.classList.add("wizard-step--completato");
+      indicatore.classList.remove("wizard-step--attivo", "wizard-step--completato", "wizard-step--bloccato");
+      if (n > TOTALE_STEP) {
+        indicatore.classList.add("wizard-step--bloccato");
+      } else if (n === numero) {
+        indicatore.classList.add("wizard-step--attivo");
+      } else if (n < numero) {
+        indicatore.classList.add("wizard-step--completato");
+      }
     });
 
     btnIndietro.style.visibility = numero === 1 ? "hidden" : "visible";

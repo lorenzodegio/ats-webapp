@@ -147,7 +147,8 @@ def form_nuovo_lotto(request: Request, utente: Utente = Depends(get_utente_corre
     return templates.TemplateResponse(
         "nuovo_lotto.html",
         {"request": request, "utente": utente, "voce_attiva": "nuova",
-         "mese_corrente": oggi.month, "anno_corrente": oggi.year},
+         "mese_corrente": oggi.month, "anno_corrente": oggi.year,
+         "fasi_wizard": FASI_WIZARD_LOTTO},
     )
 
 
