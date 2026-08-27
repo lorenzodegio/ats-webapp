@@ -29,7 +29,6 @@ consegna per l'elenco preciso dei punti da verificare.
 """
 import json
 import logging
-import os
 import re
 import shutil
 import subprocess
@@ -39,6 +38,21 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
+from app.storage import (
+    DATI_DIR,
+    RADICE_PROGETTO,
+    RICETTE,
+    RICETTE_RAW,
+    RICETTE_STAGING_IMAGES,
+    RICETTE_STAGING_PDFS,
+    SHAREPOINT_FINTO,
+    cartella_pagine_lotto,
+    pdf_originale_lotto,
+    pubblica_file,
+    pubblica_output_preprocessing,
+    relativo_a_radice,
+    rinomina_pagina_media,
+)
 from app.models import (
     LottoMensile, StatoLotto, Elaborazione, FaseElaborazione, StatoElaborazione,
     LogElaborazione, LivelloLog, Prescrizione, StatoBarcode, DatiOcr,
@@ -47,25 +61,11 @@ from app.models import (
 
 log = logging.getLogger("RealPipeline")
 
-# Cartella condivisa con i container Docker (vedi docker-compose.yml).
-DATI_DIR = Path("dati")
-RICETTE_RAW = DATI_DIR / "ricette_raw"
-RICETTE_STAGING_IMAGES = DATI_DIR / "ricette_staging" / "images"
-RICETTE_STAGING_PDFS = DATI_DIR / "ricette_staging" / "pdfs"
-RICETTE = DATI_DIR / "ricette"
 EXCEL_REGIONE_DIR = DATI_DIR / "excel_regione"
 OUTPUT_DIR = DATI_DIR / "output"
-
-FAKE_SP_ROOT = "sharepoint_finto"  # stessa cartella usata da fake_pipeline.py
+FAKE_SP_ROOT = SHAREPOINT_FINTO
 
 FILE_JSON_DA_ESCLUDERE = {"riepilogo.json"}
-
-# Dentro il container webapp il progetto e' su /workspace; sull'host e' la
-# cartella del repo. Serve a `docker compose` per trovare docker-compose.yml.
-_MOUNT_CONTAINER = Path("/workspace")
-RADICE_PROGETTO = (
-    _MOUNT_CONTAINER if os.environ.get("HOST_PROJECT_ROOT") else Path(__file__).resolve().parent.parent
-)
 
 # Barre di progresso stile tqdm (es. "Progress: |████---| 97.8% Complete"):
 # vanno rilevate per aggiornare la stessa riga di log invece di accumularne
@@ -322,13 +322,17 @@ def _copia_lotto_verso_dati(lotto: LottoMensile) -> None:
     """Copia il PDF combinato e l'Excel Regione del lotto dallo storage permanente a ./dati."""
     _pulisci_cartella_dati()
 
-    cartella_prescrizioni = Path(FAKE_SP_ROOT) / lotto.sp_prescrizioni_path
-    if cartella_prescrizioni.exists():
-        for pdf in cartella_prescrizioni.glob("*.pdf"):
-            shutil.copy2(pdf, RICETTE_RAW / pdf.name)
+    originale = pdf_originale_lotto(lotto)
+    if originale is not None:
+        shutil.copy2(originale, RICETTE_RAW / originale.name)
+    elif lotto.sp_prescrizioni_path:
+        cartella_prescrizioni = FAKE_SP_ROOT / lotto.sp_prescrizioni_path
+        if cartella_prescrizioni.exists():
+            for pdf in cartella_prescrizioni.glob("*.pdf"):
+                shutil.copy2(pdf, RICETTE_RAW / pdf.name)
 
-    if lotto.excel_input_filename:
-        cartella_lavoro = Path(FAKE_SP_ROOT) / lotto.sp_lavoro_path
+    if lotto.excel_input_filename and lotto.sp_lavoro_path:
+        cartella_lavoro = FAKE_SP_ROOT / lotto.sp_lavoro_path
         excel_path = cartella_lavoro / lotto.excel_input_filename
         if excel_path.exists():
             shutil.copy2(excel_path, EXCEL_REGIONE_DIR / excel_path.name)
@@ -359,24 +363,28 @@ def avvia_preprocessing_reale(lotto_id) -> None:
 
         _log(db, elaborazione, "Avvio container fase1-preprocessing")
         _esegui_container("fase1-preprocessing", db, elaborazione)
+        pubblica_output_preprocessing(lotto.id)
+        _log(db, elaborazione, "Pagine copiate in media/ per l'interfaccia (indipendente da Docker)")
 
         # Nessun manifest JSON scritto dal container: ricostruisco
         # l'elenco dalle cartelle di output, come fa run_fase.py stesso.
         n_letti, n_undefined = 0, 0
         for pdf in RICETTE.glob("*.pdf"):
             barcode = pdf.stem
+            png_src = RICETTE_STAGING_IMAGES / f"{barcode}.png"
             db.add(Prescrizione(
                 lotto_id=lotto.id, barcode=barcode, stato_barcode=StatoBarcode.letto,
-                sp_pdf_path=f"dati/ricette/{pdf.name}",
-                sp_png_path=f"dati/ricette/{barcode}.png",
+                sp_pdf_path=pubblica_file(lotto.id, pdf),
+                sp_png_path=pubblica_file(lotto.id, png_src) if png_src.is_file() else None,
             ))
             n_letti += 1
 
         for png in RICETTE_STAGING_IMAGES.glob("undefined_*.png"):
+            pdf_src = RICETTE_STAGING_PDFS / f"{png.stem}.pdf"
             db.add(Prescrizione(
                 lotto_id=lotto.id, barcode=None, stato_barcode=StatoBarcode.undefined,
-                sp_pdf_path=f"dati/ricette_staging/pdfs/{png.stem}.pdf",
-                sp_png_path=f"dati/ricette_staging/images/{png.name}",
+                sp_pdf_path=pubblica_file(lotto.id, pdf_src) if pdf_src.is_file() else pubblica_file(lotto.id, png),
+                sp_png_path=pubblica_file(lotto.id, png),
             ))
             n_undefined += 1
 
@@ -426,10 +434,21 @@ def correggi_barcode_reale(prescrizione_id, nuovo_barcode: str) -> None:
         vecchio_stem = Path(presc.sp_pdf_path).stem if presc.sp_pdf_path else None
         if vecchio_stem:
             origine = RICETTE_STAGING_PDFS / f"{vecchio_stem}.pdf"
+            destinazione = RICETTE / f"{nuovo_barcode}.pdf"
+            RICETTE.mkdir(parents=True, exist_ok=True)
             if origine.exists():
-                destinazione = RICETTE / f"{nuovo_barcode}.pdf"
                 shutil.move(str(origine), str(destinazione))
-                presc.sp_pdf_path = f"dati/ricette/{nuovo_barcode}.pdf"
+            rinomina_pagina_media(presc.lotto_id, vecchio_stem, nuovo_barcode)
+            pdf_media = cartella_pagine_lotto(presc.lotto_id) / f"{nuovo_barcode}.pdf"
+            png_media = cartella_pagine_lotto(presc.lotto_id) / f"{nuovo_barcode}.png"
+            if pdf_media.is_file() and not destinazione.exists():
+                shutil.copy2(pdf_media, destinazione)
+            if pdf_media.is_file():
+                presc.sp_pdf_path = relativo_a_radice(pdf_media)
+            elif destinazione.exists():
+                presc.sp_pdf_path = pubblica_file(presc.lotto_id, destinazione)
+            if png_media.is_file():
+                presc.sp_png_path = relativo_a_radice(png_media)
 
         presc.barcode = nuovo_barcode
         presc.stato_barcode = StatoBarcode.corretto_manuale
@@ -626,7 +645,7 @@ def scrivi_excel_finale_reale(lotto_id) -> bool:
         if file_excel_finale is None:
             raise RuntimeError("Il container fase4-excel non ha prodotto nessun file .xlsx in /dati/output")
 
-        cartella_output_permanente = Path(FAKE_SP_ROOT) / lotto.sp_output_path
+        cartella_output_permanente = FAKE_SP_ROOT / lotto.sp_output_path
         cartella_output_permanente.mkdir(parents=True, exist_ok=True)
         destinazione = cartella_output_permanente / file_excel_finale.name
         shutil.copy2(file_excel_finale, destinazione)

@@ -30,8 +30,14 @@ from app.models import (
     Difformita, StatoDifformita,
 )
 from app.generatore_finto import genera_barcode, genera_dati_ocr_finti, CODICI_DIFFORMITA
+from app.storage import (
+    SHAREPOINT_FINTO,
+    pdf_originale_lotto,
+    relativo_a_radice,
+    cartella_pagine_lotto,
+)
 
-FAKE_SP_ROOT = "sharepoint_finto"
+FAKE_SP_ROOT = str(SHAREPOINT_FINTO.name)
 
 # Cartella per i file Excel di output generati al completamento lotto
 PERCORSO_CARTELLA_OUTPUT_RECENTI = "ARCHIVIO/ELABORAZIONI RECENTI"
@@ -43,7 +49,7 @@ PROBABILITA_ECCEZIONE_FINTA = 0.08
 
 
 def _percorso_assoluto(percorso_relativo: str) -> str:
-    path = os.path.join(FAKE_SP_ROOT, percorso_relativo)
+    path = os.path.join(str(SHAREPOINT_FINTO), percorso_relativo)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     return path
 
@@ -111,6 +117,18 @@ def _forse_eccezione(db: Session, lotto: LottoMensile, elaborazione: Elaborazion
     return True
 
 
+def _estrai_pagina_pdf(sorgente, indice: int, destinazione):
+    from pypdf import PdfReader, PdfWriter
+    from pathlib import Path
+    destinazione = Path(destinazione)
+    destinazione.parent.mkdir(parents=True, exist_ok=True)
+    reader = PdfReader(str(sorgente))
+    writer = PdfWriter()
+    writer.add_page(reader.pages[indice])
+    with open(destinazione, "wb") as handle:
+        writer.write(handle)
+
+
 def avvia_preprocessing_fake(lotto_id) -> None:
     """Fase 1: split PDF, lettura barcode, deskew. Crea le Prescrizioni."""
     db: Session = SessionLocal()
@@ -139,25 +157,59 @@ def avvia_preprocessing_fake(lotto_id) -> None:
         if _forse_eccezione(db, lotto, elaborazione, "preprocessing"):
             return
 
-        numero_prescrizioni = random.randint(6, 24)
+        pdf_origine = pdf_originale_lotto(lotto)
+        pagine = []
+        if pdf_origine is not None:
+            try:
+                from pypdf import PdfReader
+                pagine = list(range(len(PdfReader(str(pdf_origine)).pages)))
+            except Exception:
+                pagine = []
+        if not pagine:
+            pagine = list(range(random.randint(6, 12)))
+            pdf_origine = None
+
         n_letti = 0
-        for i in range(numero_prescrizioni):
+        numero_prescrizioni = len(pagine)
+        for i in pagine:
             _controlla_pausa_e_annullamento(db, elaborazione)
-            barcode_letto = random.random() > 0.12  # ~88% barcode leggibili
+            barcode_letto = random.random() > 0.12
             barcode = genera_barcode() if barcode_letto else None
+            stem = barcode or f"undefined_{i}"
+            dest_pdf = cartella_pagine_lotto(lotto.id) / f"{stem}.pdf"
+            if pdf_origine is not None:
+                try:
+                    _estrai_pagina_pdf(pdf_origine, i, dest_pdf)
+                except Exception:
+                    dest_pdf = None
+            else:
+                dest_pdf = None
+            rel_pdf = relativo_a_radice(dest_pdf) if dest_pdf is not None and dest_pdf.is_file() else None
+            if rel_pdf is None:
+                # Ultimo ripiego: una pagina vuota ma PDF valido, così l'iframe si apre.
+                try:
+                    from pypdf import PdfWriter
+                    vuoto = cartella_pagine_lotto(lotto.id) / f"{stem}.pdf"
+                    writer = PdfWriter()
+                    writer.add_blank_page(width=595, height=842)
+                    with open(vuoto, "wb") as handle:
+                        writer.write(handle)
+                    rel_pdf = relativo_a_radice(vuoto)
+                except Exception:
+                    rel_pdf = pubblica_file(lotto.id, None)
+
             presc = Prescrizione(
                 lotto_id=lotto.id,
                 barcode=barcode,
                 stato_barcode=StatoBarcode.letto if barcode_letto else StatoBarcode.undefined,
-                sp_pdf_path=f"{lotto.sp_output_path}/CARTELLE FARMACIE/{barcode or f'undefined_{i}'}.pdf",
-                sp_png_path=f"{lotto.sp_output_path}/CARTELLE FARMACIE/{barcode or f'undefined_{i}'}.png",
+                sp_pdf_path=rel_pdf,
+                sp_png_path=None,
             )
             db.add(presc)
-            _scrivi_file_finto(presc.sp_pdf_path, f"PDF finto prescrizione {barcode or 'undefined'}")
             if barcode_letto:
                 n_letti += 1
             elaborazione.n_processati = i + 1
-            _log(db, elaborazione, f"[{i + 1}/{numero_prescrizioni}] {barcode or 'undefined'}.pdf")
+            _log(db, elaborazione, f"[{i + 1}/{numero_prescrizioni}] {stem}.pdf")
             time.sleep(0.1)
         db.commit()
 

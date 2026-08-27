@@ -48,7 +48,7 @@ services:
       dockerfile: docker/Dockerfile
     command: ["preprocessing"]
     volumes:
-      - ${HOST_PROJECT_ROOT:-.}/dati:/dati
+      - ./dati:/dati
     networks:
       - ats-pipeline_default
 
@@ -63,7 +63,7 @@ services:
       - MODELLO_LEGGERO=qwen3-vl:8b-instruct
       - OLLAMA_MODEL=qwen3-vl:30b-a3b-instruct
     volumes:
-      - ${HOST_PROJECT_ROOT:-.}/dati:/dati
+      - ./dati:/dati
     networks:
       - ats-pipeline_default
 
@@ -76,7 +76,7 @@ services:
       - OLLAMA_HOST=http://ats-ollama:11434
       - OLLAMA_MODEL_TESTO=qwen3-vl:8b-instruct
     volumes:
-      - ${HOST_PROJECT_ROOT:-.}/dati:/dati
+      - ./dati:/dati
     networks:
       - ats-pipeline_default
 
@@ -86,6 +86,6 @@ services:
       dockerfile: docker/Dockerfile
     command: ["excel"]
     volumes:
-      - ${HOST_PROJECT_ROOT:-.}/dati:/dati
+      - ./dati:/dati
     networks:
       - ats-pipeline_default
