@@ -374,19 +374,43 @@ def escludi_pagina_non_fronte(
         lotto.n_prescrizioni_totali = max(0, (lotto.n_prescrizioni_totali or 0) - 1)
     db.commit()
     return RedirectResponse(url=f"/lotti/{lotto_id}?fase=3", status_code=302)
+
+
+def _sniff_tipo_file(percorso: str):
+    try:
+        with open(percorso, "rb") as handle:
+            testa = handle.read(8)
+    except OSError:
+        return None
+    if testa.startswith(b"%PDF"):
+        return "pdf"
+    if testa.startswith(b"\x89PNG"):
+        return "png"
+    if testa[:2] == b"\xff\xd8":
+        return "jpeg"
+    return "altro"
+
+
+def _risolvi_anteprima(presc: Prescrizione):
+    pdf = _percorso_pdf_prescrizione(presc)
+    if pdf:
+        tipo = _sniff_tipo_file(pdf)
+        if tipo == "pdf":
+            return pdf, "pdf"
+        if tipo in ("png", "jpeg"):
+            return pdf, tipo
+    png = _percorso_png_prescrizione(presc)
+    if png:
+        tipo = _sniff_tipo_file(png) or "png"
+        return png, tipo
+    return None, None
+
+
+@router.get("/lotti/{lotto_id}/prescrizioni/{prescrizione_id}/pdf")
 def visualizza_pdf_prescrizione(
     lotto_id: str, prescrizione_id: str,
     db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
 ):
-    """
-    Apre nel browser il PDF della singola prescrizione (link cliccabile
-    sul barcode nel dettaglio lotto). Oggi i file vivono nella cartella
-    finta che simula SharePoint (app/fake_pipeline.FAKE_SP_ROOT); quando
-    sara' collegato lo storage reale, solo la risoluzione del percorso
-    qui sotto andra' aggiornata (lettura dal vero SharePoint via
-    Configurazione.sharepoint_base_path) — la route e il link nel
-    template restano identici.
-    """
     presc = (
         db.query(Prescrizione)
         .filter(Prescrizione.id == uuid.UUID(prescrizione_id), Prescrizione.lotto_id == uuid.UUID(lotto_id))
@@ -395,21 +419,19 @@ def visualizza_pdf_prescrizione(
     if presc is None:
         return JSONResponse({"errore": "Prescrizione o file non trovati"}, status_code=404)
 
-    percorso = _percorso_pdf_prescrizione(presc)
+    percorso, tipo = _risolvi_anteprima(presc)
     if percorso is None:
-        png = _percorso_png_prescrizione(presc)
-        if png:
-            return FileResponse(
-                png,
-                media_type="image/png",
-                headers={"Content-Disposition": f'inline; filename="{os.path.basename(png)}"'},
-            )
         return JSONResponse({"errore": "File non accessibile"}, status_code=404)
 
+    mime = {
+        "pdf": "application/pdf",
+        "png": "image/png",
+        "jpeg": "image/jpeg",
+    }.get(tipo, "application/octet-stream")
     nome = os.path.basename(percorso)
     return FileResponse(
         percorso,
-        media_type="application/pdf",
+        media_type=mime,
         headers={"Content-Disposition": f'inline; filename="{nome}"'},
     )
 
@@ -454,6 +476,7 @@ def _ctx_revisione(request, utente, lotto, presc, modo):
         "campi_area": ("testo_prescrizione", "etichetta_avvertenze"),
         "valori_ocr": {},
         "da_gestire": [],
+        "tipo_anteprima": _risolvi_anteprima(presc)[1],
     }
 
 

@@ -840,6 +840,13 @@ table.tabella tr:last-child td { border-bottom: none; }
   border-radius: 8px;
   background: #fff;
 }
+.split-revisione__img {
+  object-fit: contain;
+  background: #fff;
+  height: auto;
+  min-height: 60vh;
+  max-width: 100%;
+}
 .split-revisione__azione .campo input[type="text"],
 .split-revisione__azione .campo textarea {
   width: 100%;
