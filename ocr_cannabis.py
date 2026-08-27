@@ -101,6 +101,13 @@ except ImportError:
     DATE_CORRECTOR_DISPONIBILE = False
     log.warning('date_corrector.py non trovato — correzione TrOCR disabilitata')
 
+try:
+    import farmacie_dizionario
+    FARMACIE_DIZIONARIO_DISPONIBILE = True
+except ImportError:
+    FARMACIE_DIZIONARIO_DISPONIBILE = False
+    log.warning('farmacie_dizionario.py non trovato — uso elenco farmacie hardcoded nel prompt')
+
 # ─── Prompt ────────────────────────────────────────────────────────────────────
 
 PROMPT = """You are an expert medical document data extractor.
@@ -891,27 +898,7 @@ THC:
 
 nome_farmacia:
   Source: pharmacy stamp bottom right or pharmacy label header.
-  Map to closest from this list:
-    Farmacia Tili Snc
-    Farmacia Di Lora Srl
-    Farmacia Pomi di dr. Collivasone A. & C. Snc
-    Farmacia Ramella dott.ri G. e A. Sas
-    Farmacia Mazzucchelli F. & C. Snc
-    Farmacia Peroni dr Antonio E. & C. Sas
-    Farmacia Comunale N.2
-    Farmacia Stefini & C Sas
-    Farmacia Introini dr. Paolo & C. Sas
-    Farmacia Di Crenna
-    Farmacia Ponti
-  Specific corrections:
-    "FARMACIA POMI SNC DI AVIGNO" or "FARMACIA DI AVIGNO" -> "Farmacia Pomi di dr. Collivasone A. & C. Snc"
-    "FARMACIA RAMELLA" -> "Farmacia Ramella dott.ri G. e A. Sas"
-    "FARMACIA INTROINI" -> "Farmacia Introini dr. Paolo & C. Sas"
-    "FARMACIA MAZZUCCHELLI" -> "Farmacia Mazzucchelli F. & C. Snc"
-    "FARMACIA PERONI" -> "Farmacia Peroni dr Antonio E. & C. Sas"
-    "Farmacia Comunale 2" or "FARMACIA COMUNALE 2" or "M.S. SpA - Farmacia Comunale" -> "Farmacia Comunale N.2"
-    "FARMACIA PILI" or "FARMACIA MILI" -> "Farmacia Tili Snc"
-  Not mappable -> return name as read. Not present -> "FARMACIA NON RICONOSCIUTA"
+__ELENCO_FARMACIE__
 
 etichetta_avvertenze:
   =====================================================================
@@ -979,7 +966,46 @@ etichetta_nome_cognome_medico:
 # modello uniforme su tutti i gruppi).
 MODELLO_PESANTE = "qwen2.5vl:32b"
 MODELLO_LEGGERO = "qwen2.5vl:7b"
+MARCATORE_ELENCO_FARMACIE = "__ELENCO_FARMACIE__"
 
+
+def _prompt_resto_con_farmacie():
+    if FARMACIE_DIZIONARIO_DISPONIBILE:
+        blocco = farmacie_dizionario.blocco_prompt_farmacie()
+    else:
+        blocco = (
+            "  Map to closest from this list:\n"
+            "    Farmacia Tili Snc\n"
+            "    Farmacia Di Lora Srl\n"
+            "    Farmacia Pomi di dr. Collivasone A. & C. Snc\n"
+            "    Farmacia Ramella dott.ri G. e A. Sas\n"
+            "    Farmacia Mazzucchelli F. & C. Snc\n"
+            "    Farmacia Peroni dr Antonio E. & C. Sas\n"
+            "    Farmacia Comunale N.2\n"
+            "    Farmacia Stefini & C Sas\n"
+            "    Farmacia Introini dr. Paolo & C. Sas\n"
+            "    Farmacia Di Crenna\n"
+            "    Farmacia Ponti\n"
+            "  Not mappable -> return name as read. Not present -> \"FARMACIA NON RICONOSCIUTA\""
+        )
+    return PROMPT_GRUPPO_RESTO.replace(MARCATORE_ELENCO_FARMACIE, blocco)
+
+
+def gruppi_estrazione():
+    return [
+        ("critico", PROMPT_GRUPPO_CRITICO, True, "pesante"),
+        ("resto", _prompt_resto_con_farmacie(), True, "leggero"),
+    ]
+
+
+# Due gruppi organizzati per CRITICITA' (non per argomento tematico): il
+# gruppo CRITICO raccoglie i campi dove i test hanno mostrato più errori
+# (CF, esenzione, tutte le date, tutti i prezzi) e usa il modello pesante;
+# il RESTO usa il modello leggero. Solo 2 chiamate = un solo cambio di
+# modello, minimizzando il costo di caricamento/scaricamento tra i due.
+# MODELLO_LEGGERO viene sovrascritto a MODELLO_PESANTE se l'utente passa
+# esplicitamente --model da riga di comando (per test A/B con un solo
+# modello uniforme su tutti i gruppi).
 GRUPPI_ESTRAZIONE = [
     ("critico", PROMPT_GRUPPO_CRITICO, True, "pesante"),
     ("resto", PROMPT_GRUPPO_RESTO, True, "leggero"),
@@ -1284,31 +1310,39 @@ def sanity_check(dati: dict) -> dict:
     # e proverebbe tutti i profili in sequenza invece di usare subito
     # quello giusto. Tolleranza proporzionale alla lunghezza (nomi lunghi
     # tollerano piu' caratteri di differenza rispetto a nomi corti).
-    FARMACIE_CANONICHE = [
-        "Farmacia Tili Snc", "Farmacia Di Lora Srl",
-        "Farmacia Pomi di dr. Collivasone A. & C. Snc",
-        "Farmacia Ramella dott.ri G. e A. Sas",
-        "Farmacia Mazzucchelli F. & C. Snc",
-        "Farmacia Peroni dr Antonio E. & C. Sas",
-        "Farmacia Comunale N.2", "Farmacia Stefini & C Sas",
-        "Farmacia Introini dr. Paolo & C. Sas",
-        "Farmacia Di Crenna", "Farmacia Ponti",
-    ]
     nome_farmacia_attuale = str(dati.get("nome_farmacia", "")).strip()
-    if nome_farmacia_attuale and nome_farmacia_attuale not in FARMACIE_CANONICHE \
-       and nome_farmacia_attuale != "FARMACIA NON RICONOSCIUTA":
-        migliore_match, migliore_rapporto = None, None
-        for canonica in FARMACIE_CANONICHE:
-            d = _distanza_levenshtein_semplice(nome_farmacia_attuale.lower(), canonica.lower())
-            rapporto = d / max(len(canonica), 1)  # differenza proporzionale alla lunghezza
-            if migliore_rapporto is None or rapporto < migliore_rapporto:
-                migliore_match, migliore_rapporto = canonica, rapporto
-        if migliore_rapporto is not None and migliore_rapporto <= 0.25:
-            log.info(
-                f"  nome_farmacia: '{nome_farmacia_attuale}' corretta fuzzy in "
-                f"'{migliore_match}' (differenza {migliore_rapporto:.0%})"
-            )
-            dati["nome_farmacia"] = migliore_match
+    if nome_farmacia_attuale and nome_farmacia_attuale != "FARMACIA NON RICONOSCIUTA":
+        if FARMACIE_DIZIONARIO_DISPONIBILE:
+            canonico, _codice = farmacie_dizionario.normalizza_nome_farmacia(nome_farmacia_attuale)
+            if canonico != nome_farmacia_attuale:
+                log.info(
+                    f"  nome_farmacia: '{nome_farmacia_attuale}' corretta fuzzy in '{canonico}'"
+                )
+                dati["nome_farmacia"] = canonico
+        else:
+            FARMACIE_CANONICHE = [
+                "Farmacia Tili Snc", "Farmacia Di Lora Srl",
+                "Farmacia Pomi di dr. Collivasone A. & C. Snc",
+                "Farmacia Ramella dott.ri G. e A. Sas",
+                "Farmacia Mazzucchelli F. & C. Snc",
+                "Farmacia Peroni dr Antonio E. & C. Sas",
+                "Farmacia Comunale N.2", "Farmacia Stefini & C Sas",
+                "Farmacia Introini dr. Paolo & C. Sas",
+                "Farmacia Di Crenna", "Farmacia Ponti",
+            ]
+            if nome_farmacia_attuale not in FARMACIE_CANONICHE:
+                migliore_match, migliore_rapporto = None, None
+                for canonica in FARMACIE_CANONICHE:
+                    d = _distanza_levenshtein_semplice(nome_farmacia_attuale.lower(), canonica.lower())
+                    rapporto = d / max(len(canonica), 1)
+                    if migliore_rapporto is None or rapporto < migliore_rapporto:
+                        migliore_match, migliore_rapporto = canonica, rapporto
+                if migliore_rapporto is not None and migliore_rapporto <= 0.25:
+                    log.info(
+                        f"  nome_farmacia: '{nome_farmacia_attuale}' corretta fuzzy in "
+                        f"'{migliore_match}' (differenza {migliore_rapporto:.0%})"
+                    )
+                    dati["nome_farmacia"] = migliore_match
 
 
     # Stessa idea: se il campo è vuoto ma testo_prescrizione contiene le
@@ -1417,6 +1451,10 @@ def recupera_profilo_farmacia_da_regione(barcode: str) -> str:
         return ""
 
     farmacia_id_upper = farmacia_id.upper()
+    if FARMACIE_DIZIONARIO_DISPONIBILE:
+        canonico, _codice = farmacie_dizionario.normalizza_nome_farmacia(farmacia_id)
+        if canonico and canonico != farmacia_id:
+            return canonico
     for chiave, profilo in MAPPATURA_FARMACIA_ID_A_PROFILO.items():
         if chiave in farmacia_id_upper:
             return profilo
@@ -1518,7 +1556,7 @@ def estrai_dati(pdf_path: Path) -> dict:
     dati = {}
     almeno_un_gruppo_riuscito = False
 
-    for nome_gruppo, prompt_gruppo, e_gruppo_etichetta, peso in GRUPPI_ESTRAZIONE:
+    for nome_gruppo, prompt_gruppo, e_gruppo_etichetta, peso in gruppi_estrazione():
         prompt_finale = prompt_gruppo
         if e_gruppo_etichetta:
             prompt_finale = costruisci_prompt(etichetta_result, prompt_gruppo)

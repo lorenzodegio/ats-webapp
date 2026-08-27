@@ -38,7 +38,8 @@ app/
 │   ├── auth_router.py
 │   ├── dashboard.py
 │   ├── lotti.py               # rotte principali: nuovo lotto, elaborazioni, dettaglio
-│   └── archivio.py
+│   ├── archivio.py
+│   └── impostazioni.py        # Impostazioni admin: censimento farmacie
 ├── templates/                 # tutte estendono base.html
 │   ├── base.html
 │   ├── login.html
@@ -47,6 +48,7 @@ app/
 │   ├── nuovo_lotto.html       # wizard 4 step: Caricamento→Modalità→Conferma→Monitoraggio
 │   ├── lotto_detail.html
 │   ├── archivio.html
+│   ├── impostazioni.html
 │   └── _badge_stato.html
 └── static/
     ├── css/style.css          # design system, UN SOLO file, vedi sotto
@@ -76,8 +78,7 @@ DB pulito: cancella `ats_cannabis.db` e rilancia `seed_admin.py`.
 
 ## Modello dati
 Core: `LottoMensile` (batch mensile, UUID PK), lifecycle a 10 stati con
-gate di revisione manuale tra fasi automatiche. Altri modelli: `Utente`,
-`Job`, `Prescrizione`, `Difformita` (19 codici di non conformità).
+gate di revisione manuale tra fasi automatiche. Altri modelli: `Utente`, `Farmacia`, `Prescrizione`, `Difformita` (19 codici di non conformità).
 
 ## Endpoint (contratto fisso col backend — NON rinominare)
 `/login`, `/jobs/nuovo`, `/jobs`, `/archivio`, `/difformita`
@@ -138,52 +139,68 @@ reimplementarle):
   `app/static/README.md` — prototipo standalone precedente, sistema a
   "batch code", non integrato con l'architettura attuale
 
-## Step "Monitoraggio" del wizard — requisiti funzionali
-È il punto in cui l'operatore ATS decide se il lotto può essere chiuso o
-serve intervento. Grazie al merge di Khalil (26/08), alcuni pezzi sono
-già coperti (vedi sezione sopra) — verifica sempre cosa esiste prima di
-implementare, questa lista NON è più tutta da zero:
+## Step "Monitoraggio" del wizard — decisione architetturale (26/08)
+Khalil ha implementato il wizard con solo 3 step (Dati lotto → Caricamento
+→ Conferma), con redirect finale a `/lotti/{id}` (`lotto_detail.html`)
+invece del 4° step "Monitoraggio" previsto dal documento di progetto
+originale. NON è la soluzione voluta: va rifatto come 4° step vero e
+proprio, integrato nello stepper di `nuovo_lotto.html`, non come pagina
+separata raggiunta via redirect.
 
-1. **Vista d'insieme del lotto**: totale prescrizioni, quante pulite,
-   quante con difformità (colpo d'occhio prima del dettaglio) — DA
-   VERIFICARE se già presente, `kpi-card` con "Barcode da rivedere" era
-   già visto in una versione, controllare l'estensione ad altri KPI
-2. **Lista prescrizioni con difformità, filtrabile**: distinguere
-   difformità bloccanti da minori (i 19 codici non hanno tutti lo stesso
-   peso) — probabilmente ancora da fare
-3. **Confronto per ogni prescrizione**: dato letto dall'OCR vs atteso —
-   serve per distinguere falso positivo (errore OCR) da vero positivo
-   (prescrizione realmente non conforme) — probabilmente ancora da fare
-4. **Azione di correzione per riga**: operatore può correggere un campo
-   letto male, oppure confermare la difformità e decidere l'esito —
-   probabilmente ancora da fare
-5. **Chiusura lotto**: azione finale che valida il lotto = gate di
-   revisione manuale nel lifecycle a 10 stati del `LottoMensile` —
-   probabilmente ancora da fare
-6. **Export ZIP per farmacia**: GIA' PARZIALMENTE COPERTO da "Link file
-   Excel di output" di Khalil, ma quello è un export singolo, non uno zip
-   multi-cartella per farmacia — verificare cosa manca esattamente
-7. **Accesso al PDF originale**: GIA' FATTO da Khalil (barcode linkati al
-   PDF) — non reimplementare, solo verificare che copra anche lo step
-   Monitoraggio e non solo dettaglio lotto/archivio
+Decisione presa con Lorenzo: il Monitoraggio deve apparire come step 4
+visivo nello stesso stepper (Dati lotto → Caricamento → Conferma →
+**Monitoraggio**), dentro `nuovo_lotto.html`. La logica/i dati possono
+riusare quanto già presente in `lotto_detail.html`/`lotti.py` (non
+buttare via il lavoro di Khalil, quello resta valido come base per la
+pagina di dettaglio archiviato di un lotto già chiuso), ma l'esperienza
+del wizard per un lotto appena creato deve restare dentro un unico flusso
+a 4 step, senza redirect verso un'altra pagina percepita come "diversa".
 
-IMPORTANTE: prima di iniziare qualunque lavoro sul Monitoraggio, fai un
-inventario aggiornato di app/templates/lotto_detail.html e
-app/routers/lotti.py per capire esattamente cosa Khalil ha già coperto,
-invece di fidarti ciecamente di questa lista (scritta prima del suo
-ultimo merge, potrebbe non riflettere lo stato più recente).
+Stato reale delle funzionalità sottostanti (verificato via inventario in
+`lotto_detail.html`/`lotti.py`, riusabili per costruire lo step 4):
 
-## Censimento farmacie (nuova feature, per il punto 6 sopra)
-Serve un CRUD farmacie (una decina in totale) in una nuova pagina
-Impostazioni (solo admin) — vedi anche gap "Pagina Impostazioni" sotto.
-Attenzione: questo si divide in due parti separate, NON sovrapporle:
-- **CRUD farmacie**: puro frontend/backend webapp, nessun impatto sulla
-  pipeline OCR — la fa chi lavora sul frontend
-- **Fuzzy matching nome farmacia** (l'OCR confronta il nome letto con
-  l'elenco censito e scrive il nome standardizzato più simile): questo
-  tocca `ocr_cannabis.py` / `phase5_difformita.py` nella repo pipeline
-  separata — è territorio di Francesco, NON bloccare lo step
-  Monitoraggio in attesa di questo pezzo
+1. **Vista d'insieme**: 🟡 metà fatto — 4 kpi-card esistono (totali,
+   barcode da rivedere, score medio, difformità); manca la card
+   pulite/con-difformità (il dato `n_prescrizioni_con_diffollo` esiste nel
+   modello ma non è mostrato)
+2. **Filtro bloccanti/minori**: ❌ da fare, nessuna base esistente
+3. **Confronto OCR grezzo vs corretto**: ❌ da fare. NON esiste un
+   "valore atteso" esterno con cui confrontare (l'Excel regionale non
+   viene letto riga per riga, `barcode_in_excel` è solo un booleano di
+   match). Il confronto reale è tra `DatiOcr.json_vllm_raw` (output
+   grezzo) e `DatiOcr.json_corretto` (dopo intervento) — entrambi i
+   campi esistono già nel modello, nessuna migrazione necessaria
+4. **Correzione per riga**: 🟡 metà fatto — conferma/esclusione
+   difformità già in `lotti.py:318`; manca l'editing del campo OCR
+   (usa `json_corretto`, `corretto_da_id`, `corretto_at`, già in
+   `models.py`)
+5. **Chiusura lotto**: ✅ già fatto — `POST /lotti/{id}/completa` quando
+   tutte le difformità sono gestite
+6. **Export ZIP per farmacia**: 🟡 parziale — esiste
+   `GET /lotti/{id}/output-excel` ma è un export singolo, non uno zip
+   multi-cartella per farmacia
+7. **PDF originale**: ✅ già fatto — route `lotti.py:260`, linkato in
+   tutte e 5 le tabelle di `lotto_detail.html`
+
+Lavoro reale rimanente per il subagent:
+0. **Integrare come 4° step visivo del wizard** (nuovo, priorità
+   architetturale prima di tutto il resto — vedi decisione sopra)
+1 (completare KPI), 2 (nuovo), 3 (nuovo, ridefinito come sopra),
+4 (completare), 6 (estendere a multi-farmacia).
+
+## Censimento farmacie
+CRUD in Impostazioni (solo admin). Campi: codice, nome, codice_regionale
+(FARMACIA_ID Excel Regione), indirizzo, comune, provincia, telefono, email,
+note, attiva — senza nome_breve.
+
+L'elenco attivo va all'IA in due modi (entrambi):
+- **A)** `dati/farmacie.json` iniettato nel prompt OCR (`ocr_cannabis.py`)
+- **B)** matching fuzzy deterministico (`farmacie_dizionario.py`) in OCR e in
+  `phase5_difformita.py`
+
+La lista hardcoded nei prompt e' il fallback se il JSON non e' presente.
+La repo pipeline di Francesco va allineata quando si ricostruisce l'immagine
+Docker (`farmacie_dizionario.py` e' nel Dockerfile).
 
 ## Dashboard analytics stile "Power BI" (nuova feature, separata dal wizard)
 Visualizzazione Python con filtri per esplorare storicamente tutte le
@@ -194,13 +211,14 @@ non infilata dentro lo step Monitoraggio.
 
 ## Gap aperti (priorità pre-31 agosto)
 1. Step "Monitoraggio" del wizard (vedi sopra) — gap più grande e più
-   urgente, oggi è uno scheletro vuoto
-2. Pagina "Impostazioni" (solo admin): non esiste ancora né route né
-   template. Contiene sia il censimento farmacie sia altre config.
-   Seguire lo schema di `app/routers/archivio.py` come esempio di router
-   protetto più semplice.
+   urgente. Khalil ha implementato solo 3 step con redirect a
+   lotto_detail.html invece del 4° step integrato: va rifatto come step
+   visivo nello stepper, riusando la logica sottostante già scritta
+2. Pagina Impostazioni: CRUD farmacie fatto; tab Sistema in sola lettura
+   (modifica config da UI ancora da fare)
 3. Dashboard analytics stile Power BI (vedi sopra)
-4. Fuzzy matching farmacie nell'OCR — dipende da Francesco, repo pipeline
+4. Allineare l'immagine Docker/pipeline ATS con `farmacie_dizionario.py`
+   (gia' nel Dockerfile di questa repo)
 5. Validazioni upload più robuste nel wizard: oggi solo estensione .pdf
    lato client, manca feedback su file troppo grandi
 6. Stati vuoti / micro-interazioni: skeleton loading, animazioni badge

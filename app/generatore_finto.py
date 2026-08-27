@@ -11,9 +11,19 @@ NOMI_PAZIENTI = ["Mario Rossi", "Anna Bianchi", "Luca Verdi", "Giulia Ferrari", 
 NOMI_MEDICI = ["Dr. Alberto Fumagalli", "Dr.ssa Silvia Brambilla", "Dr. Enrico Riva",
                "Dr.ssa Paola Sala", "Dr. Matteo Longoni"]
 
-NOMI_FARMACIE = ["Farmacia Centrale Varese", "Farmacia San Giorgio Como",
-                  "Farmacia Comunale 3 Busto Arsizio", "Farmacia Moderna Gallarate",
-                  "Farmacia della Stazione Saronno"]
+NOMI_FARMACIE = [
+    "Farmacia Tili Snc",
+    "Farmacia Di Lora Srl",
+    "Farmacia Pomi di dr. Collivasone A. & C. Snc",
+    "Farmacia Ramella dott.ri G. e A. Sas",
+    "Farmacia Mazzucchelli F. & C. Snc",
+    "Farmacia Peroni dr Antonio E. & C. Sas",
+    "Farmacia Comunale N.2",
+    "Farmacia Stefini & C Sas",
+    "Farmacia Introini dr. Paolo & C. Sas",
+    "Farmacia Di Crenna",
+    "Farmacia Ponti",
+]
 
 FORME_FARMACEUTICHE = ["Infiorescenza", "Olio", "Cartine"]
 METODI_ESTRATTIVI = ["Decozione", "Olio oliva a freddo", "Olio oliva a caldo", "N/A"]

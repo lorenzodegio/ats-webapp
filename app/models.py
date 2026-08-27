@@ -50,6 +50,38 @@ class Configurazione(Base):
 
 
 # ============================================================
+# Farmacie — anagrafica delle farmacie convenzionate
+# ============================================================
+
+class Farmacia(Base):
+    """
+    Censimento usato sia dagli operatori (ZIP per farmacia, comunicazioni)
+    sia dalla pipeline OCR (dizionario nel prompt + matching fuzzy).
+    Il codice_regionale e' il FARMACIA_ID dell'Excel Regione
+    (es. "CO0310 - TILI & C."), non un alias interno.
+    """
+    __tablename__ = "farmacie"
+
+    id = Column(GUID, primary_key=True, default=genera_uuid)
+    codice = Column(String(20), unique=True, nullable=False, index=True)
+    nome = Column(String(255), nullable=False)
+    codice_regionale = Column(String(120), nullable=True, index=True)
+    indirizzo = Column(String(500), nullable=True)
+    comune = Column(String(120), nullable=True)
+    provincia = Column(String(5), nullable=True)
+    telefono = Column(String(40), nullable=True)
+    email = Column(String(255), nullable=True)
+    note = Column(Text, nullable=True)
+    attiva = Column(Boolean, default=True, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<Farmacia {self.codice} — {self.nome}>"
+
+
+# ============================================================
 # Utenti
 # ============================================================
 
@@ -373,6 +405,12 @@ class StatoDifformita(str, enum.Enum):
     in_revisione = "in_revisione"
 
 
+class GravitaDifformita(str, enum.Enum):
+    alta = "alta"
+    media = "media"
+    bassa = "bassa"
+
+
 class Difformita(Base):
     __tablename__ = "difformita"
 
@@ -388,6 +426,31 @@ class Difformita(Base):
     gestita_da_id = Column(GUID, ForeignKey("utenti.id"), nullable=True)
     gestita_da = relationship("Utente")
     gestita_at = Column(DateTime, nullable=True)
+
+    @property
+    def gravita(self) -> GravitaDifformita:
+        MAPPA_CODICI = {
+            "01": GravitaDifformita.alta,
+            "02": GravitaDifformita.alta,
+            "03": GravitaDifformita.alta,
+            "04": GravitaDifformita.alta,
+            "05": GravitaDifformita.bassa,
+            "05A": GravitaDifformita.alta,
+            "06": GravitaDifformita.alta,
+            "07": GravitaDifformita.alta,
+            "08": GravitaDifformita.bassa,
+            "09": GravitaDifformita.alta,
+            "10": GravitaDifformita.alta,
+            "11": GravitaDifformita.alta,
+            "12": GravitaDifformita.bassa,
+            "13": GravitaDifformita.bassa,
+            "14": GravitaDifformita.bassa,
+            "16": GravitaDifformita.alta,
+            "17": GravitaDifformita.alta,
+            "18": GravitaDifformita.alta,
+            "19": GravitaDifformita.alta
+        }
+        return MAPPA_CODICI.get(self.codice, GravitaDifformita.bassa)
 
 
 # ============================================================
@@ -419,21 +482,6 @@ class Annotazione(Base):
     testo = Column(Text, nullable=False)
     tipo_nota = Column(Enum(TipoNota), default=TipoNota.nota, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
-
-
-# ============================================================
-# Farmacie — storico per farmacia
-# ============================================================
-
-class Farmacia(Base):
-    __tablename__ = "farmacie"
-
-    id = Column(GUID, primary_key=True, default=genera_uuid)
-    codice = Column(String(50), unique=True, nullable=False)
-    nome = Column(String(255), nullable=False)
-    indirizzo = Column(String(500), nullable=True)
-    n_difformita_totali = Column(Integer, default=0)
-    ultima_elaborazione = Column(DateTime, nullable=True)
 
 
 # ============================================================

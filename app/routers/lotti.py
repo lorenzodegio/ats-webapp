@@ -5,7 +5,11 @@ completamento, archiviazione).
 """
 import os
 import uuid
-from datetime import datetime
+import io
+import zipfile
+import re
+import pandas as pd
+from datetime import datetime, date
 
 from fastapi import APIRouter, Request, Depends, Form, UploadFile, File, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse, Response
@@ -17,7 +21,8 @@ from app.auth import get_utente_corrente
 from app.models import (
     LottoMensile, StatoLotto, CaricamentoFile, TipoCaricamento, StatoCaricamento,
     Prescrizione, StatoBarcode, Difformita, StatoDifformita, Elaborazione,
-    StatoElaborazione, FaseElaborazione, Utente,
+    StatoElaborazione, FaseElaborazione, Utente, StatoRevisionePrescrizione, DatiOcr,
+    GravitaDifformita,
 )
 from app.fake_pipeline import (
     avvia_preprocessing_fake, avvia_ocr_fake, avvia_difformita_fake,
@@ -332,6 +337,42 @@ def gestisci_difformita(
     return RedirectResponse(url=f"/lotti/{lotto_id}#revisione-difformita", status_code=302)
 
 
+COLONNE_DATI_OCR = [
+    "cognome_nome_assistito", "codice_fiscale", "codice_esenzione", "codice_atc",
+    "testo_prescrizione", "metodo_estrattivo_olio", "forma_farmaceutica",
+    "data_prescrizione", "data_etichetta_preparazione", "data_invio",
+    "etichetta_data_scadenza", "timbro_medico", "firma_medico",
+    "etichetta_nome_cognome_medico", "etichetta_nome_cognome_paziente",
+    "etichetta_prezzo_sost", "etichetta_prezzo_on", "etichetta_prezzo_rec",
+    "etichetta_prezzo_iva", "etichetta_prezzo_tot", "totale_prescrizione",
+    "etichetta_thc", "nome_farmacia", "etichetta_avvertenze",
+]
+
+def parse_date_only(val: str):
+    if not val or val.strip().upper() in ("", "NONE", "NAN", "NAT", "OCR_INCERTO"):
+        return None
+    try:
+        return datetime.strptime(val.strip(), "%Y-%m-%d").date()
+    except ValueError:
+        try:
+            return datetime.strptime(val.strip(), "%d/%m/%Y").date()
+        except ValueError:
+            return None
+
+def parse_numeric(val: str):
+    if not val or val.strip().upper() in ("", "NONE", "NAN"):
+        return None
+    try:
+        return float(val.replace(",", "."))
+    except ValueError:
+        return None
+
+def parse_boolean(val: str):
+    if val is None:
+        return False
+    return str(val).strip().lower() in ("true", "1", "on", "yes", "sì", "si")
+
+
 @router.post("/lotti/{lotto_id}/completa")
 def completa_lotto(
     lotto_id: str, db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
@@ -345,25 +386,208 @@ def completa_lotto(
                     url=f"/lotti/{lotto_id}?errore=Scrittura+Excel+finale+fallita,+vedi+i+log", status_code=302
                 )
             db.refresh(lotto)
+        else:
+            nome_file = f"OUTPUT_CANNABIS_{lotto.nome}.xlsx"
+            lotto.excel_output_filename = nome_file
+            
+            from openpyxl import Workbook
+            wb = Workbook()
+            ws = wb.active
+            
+            headers = ["BARCODE", "nome_farmacia", "codice_fiscale", "codice_esenzione", "forma_farmaceutica", "totale_prescrizione"]
+            ws.append(headers)
+            for p in lotto.prescrizioni:
+                nf = p.dati_ocr.nome_farmacia if (p.dati_ocr and p.dati_ocr.nome_farmacia) else "FARMACIA DI PROVA"
+                cf = p.dati_ocr.codice_fiscale if (p.dati_ocr and p.dati_ocr.codice_fiscale) else "RSSMRA80A01H501U"
+                ce = p.dati_ocr.codice_esenzione if (p.dati_ocr and p.dati_ocr.codice_esenzione) else "048"
+                ff = p.dati_ocr.forma_farmaceutica if (p.dati_ocr and p.dati_ocr.forma_farmaceutica) else "olio in flacone"
+                tot = p.dati_ocr.totale_prescrizione if (p.dati_ocr and p.dati_ocr.totale_prescrizione) else 100.0
+                ws.append([p.barcode, nf, cf, ce, ff, tot])
+                
+            percorso_dir = os.path.join(FAKE_SP_ROOT, PERCORSO_CARTELLA_OUTPUT_RECENTI)
+            os.makedirs(percorso_dir, exist_ok=True)
+            wb.save(os.path.join(percorso_dir, nome_file))
+            
         lotto.stato = StatoLotto.completato
         lotto.completato_at = datetime.utcnow()
         db.commit()
     return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
 
 
+@router.get("/lotti/{lotto_id}/export-zip")
+def export_zip(
+    lotto_id: str,
+    db: Session = Depends(get_db),
+    utente: Utente = Depends(get_utente_corrente),
+):
+    lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
+    if lotto is None:
+        return JSONResponse({"errore": "Lotto non trovato"}, status_code=404)
+    if lotto.stato != StatoLotto.completato and lotto.stato != StatoLotto.archiviato:
+        return JSONResponse({"errore": "Il lotto deve essere completato per esportare lo ZIP"}, status_code=400)
+
+    percorso_excel = os.path.join(FAKE_SP_ROOT, "LAVORO/OUTPUT", lotto.excel_output_filename)
+    if not os.path.exists(percorso_excel):
+        return JSONResponse({"errore": f"File Excel principale non trovato a {percorso_excel}"}, status_code=404)
+
+    try:
+        df = pd.read_excel(percorso_excel)
+    except Exception as e:
+        return JSONResponse({"errore": f"Errore nella lettura del file Excel principale: {e}"}, status_code=500)
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        prescrizioni = lotto.prescrizioni
+        gruppi_farmacia = {}
+        for p in prescrizioni:
+            nome_farmacia = "FARMACIA_SCONOSCIUTA"
+            if p.dati_ocr and p.dati_ocr.nome_farmacia:
+                nome_farmacia = p.dati_ocr.nome_farmacia.strip()
+            nome_cartella = re.sub(r'[^a-zA-Z0-9_\-\s]', '', nome_farmacia).strip().replace(" ", "_")
+            if not nome_cartella:
+                nome_cartella = "FARMACIA_SCONOSCIUTA"
+            if nome_cartella not in gruppi_farmacia:
+                gruppi_farmacia[nome_cartella] = []
+            gruppi_farmacia[nome_cartella].append(p)
+
+        for nome_cartella, prescs in gruppi_farmacia.items():
+            for p in prescs:
+                if p.sp_pdf_path:
+                    percorso_pdf = os.path.join(FAKE_SP_ROOT, p.sp_pdf_path)
+                    if os.path.exists(percorso_pdf):
+                        nome_pdf = os.path.basename(p.sp_pdf_path)
+                        zip_file.write(percorso_pdf, arcname=f"{nome_cartella}/{nome_pdf}")
+            
+            barcodes_gruppo = [p.barcode for p in prescs if p.barcode]
+            barcodes_set = set(barcodes_gruppo)
+            
+            colonna_barcode = None
+            for col in df.columns:
+                if str(col).upper() == "BARCODE":
+                    colonna_barcode = col
+                    break
+            
+            if colonna_barcode is not None:
+                df_farmacia = df[df[colonna_barcode].astype(str).str.strip().isin(barcodes_set)]
+            else:
+                colonna_farmacia = None
+                for col in df.columns:
+                    if "FARMACIA" in str(col).upper():
+                        colonna_farmacia = col
+                        break
+                if colonna_farmacia is not None:
+                    df_farmacia = df[df[colonna_farmacia].astype(str).str.contains(nome_cartella.replace("_", " "), case=False, na=False)]
+                else:
+                    df_farmacia = df.head(0)
+
+            excel_buffer = io.BytesIO()
+            with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+                df_farmacia.to_excel(writer, index=False, sheet_name="Prescrizioni")
+            
+            zip_file.writestr(
+                f"{nome_cartella}/Prescrizioni_{nome_cartella}.xlsx",
+                excel_buffer.getvalue()
+            )
+
+    zip_buffer.seek(0)
+    nome_zip = f"ESPORTAZIONE_FARMACIE_{lotto.nome}.zip"
+    return Response(
+        zip_buffer.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={nome_zip}"}
+    )
+
+
+@router.get("/lotti/{lotto_id}/prescrizioni/{prescrizione_id}/ocr")
+def get_ocr_data(
+    lotto_id: str, prescrizione_id: str,
+    db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente)
+):
+    presc = db.query(Prescrizione).filter(Prescrizione.id == uuid.UUID(prescrizione_id)).first()
+    if not presc or not presc.dati_ocr:
+        return JSONResponse({"errore": "Dati OCR non trovati"}, status_code=404)
+    
+    dati = presc.dati_ocr
+    raw = dati.json_vllm_raw or {}
+    
+    corretto = dati.json_corretto or {}
+    if not corretto:
+        corretto = {col: getattr(dati, col) for col in COLONNE_DATI_OCR}
+        for k, v in corretto.items():
+            if isinstance(v, (date, datetime)):
+                corretto[k] = v.isoformat()
+            elif isinstance(v, (int, float)):
+                corretto[k] = float(v)
+            elif v is not None:
+                corretto[k] = str(v)
+                
+    return {
+        "barcode": presc.barcode,
+        "raw": raw,
+        "corretto": corretto
+    }
+
+
+@router.post("/lotti/{lotto_id}/prescrizioni/{prescrizione_id}/ocr")
+async def correggi_ocr(
+    lotto_id: str,
+    prescrizione_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    utente: Utente = Depends(get_utente_corrente),
+):
+    presc = db.query(Prescrizione).filter(Prescrizione.id == uuid.UUID(prescrizione_id)).first()
+    if not presc or not presc.dati_ocr:
+        return JSONResponse({"errore": "Dati OCR o prescrizione non trovati"}, status_code=404)
+        
+    dati_ocr = presc.dati_ocr
+    form_data = await request.form()
+    
+    CAMPI_BOOLEANI = {"timbro_medico", "firma_medico"}
+    CAMPI_PREZZO = {
+        "etichetta_prezzo_sost", "etichetta_prezzo_on", "etichetta_prezzo_rec",
+        "etichetta_prezzo_iva", "etichetta_prezzo_tot", "totale_prescrizione",
+    }
+    CAMPI_DATA = {
+        "data_prescrizione", "data_etichetta_preparazione", "data_invio", "etichetta_data_scadenza",
+    }
+    
+    for col in COLONNE_DATI_OCR:
+        if col in form_data:
+            val_raw = form_data.get(col)
+            if col in CAMPI_DATA:
+                setattr(dati_ocr, col, parse_date_only(val_raw))
+            elif col in CAMPI_PREZZO:
+                setattr(dati_ocr, col, parse_numeric(val_raw))
+            elif col in CAMPI_BOOLEANI:
+                setattr(dati_ocr, col, parse_boolean(val_raw))
+            else:
+                setattr(dati_ocr, col, val_raw if val_raw != "" else None)
+        else:
+            if col in CAMPI_BOOLEANI:
+                setattr(dati_ocr, col, False)
+
+    json_data = {}
+    for col in COLONNE_DATI_OCR:
+        val = getattr(dati_ocr, col)
+        if isinstance(val, (date, datetime)):
+            json_data[col] = val.isoformat()
+        else:
+            json_data[col] = val
+            
+    dati_ocr.json_corretto = json_data
+    dati_ocr.corretto_da_id = utente.id
+    dati_ocr.corretto_at = datetime.utcnow()
+    presc.stato_revisione = StatoRevisionePrescrizione.corretto
+    
+    db.commit()
+    return {"stato": "ok"}
+
+
 @router.get("/lotti/{lotto_id}/output-excel")
 def visualizza_output_excel(
     lotto_id: str, db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
 ):
-    """
-    Apre/scarica il foglio di output finale del lotto (bottone "Apri
-    file Excel" nel dettaglio lotto). Stessa cartella fissa per tutti
-    i lotti (PERCORSO_CARTELLA_OUTPUT_RECENTI, vedi fake_pipeline.py) —
-    a differenza dei PDF per prescrizione, qui non c'e' bisogno del
-    fallback "genera al volo" perche' il file nasce sempre insieme al
-    completamento del lotto (completa_lotto chiama genera_excel_output_fake
-    prima di cambiare stato): se manca, il lotto non e' davvero completato.
-    """
     lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
     if lotto is None or not lotto.excel_output_filename:
         return JSONResponse({"errore": "Excel di output non ancora disponibile per questo lotto"}, status_code=404)

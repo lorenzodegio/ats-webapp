@@ -193,6 +193,26 @@ a { color: inherit; text-decoration: none; }
 
 .kpi-card--accento .kpi-card__valore { color: var(--terracotta); }
 
+/* ---------- Gravità difformità ---------- */
+.pallino-gravita {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+.pallino-gravita--alta  { background: #e74c3c; }
+.pallino-gravita--media { background: #f39c12; }
+.pallino-gravita--bassa { background: #f1c40f; }
+
+/* ---------- Riga filtri ---------- */
+.filtri-riga {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 /* ---------- Barre difformita ---------- */
 .barra-riga {
   display: grid;
@@ -296,7 +316,9 @@ table.tabella tr:last-child td { border-bottom: none; }
 .campo input[type="search"],
 .campo input[type="number"],
 .campo input[type="date"],
-.campo select {
+.campo input[type="email"],
+.campo select,
+.campo textarea {
   width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--border-color);
@@ -307,7 +329,7 @@ table.tabella tr:last-child td { border-bottom: none; }
   color: var(--text-primary);
 }
 
-.campo input:focus, .campo select:focus {
+.campo input:focus, .campo select:focus, .campo textarea:focus {
   outline: none;
   border-color: var(--sage);
   box-shadow: 0 0 0 3px rgba(107, 144, 128, 0.15);
@@ -342,6 +364,50 @@ table.tabella tr:last-child td { border-bottom: none; }
   padding: 10px 14px;
   font-size: 13px;
   margin-bottom: 16px;
+}
+
+.ok-form {
+  background: rgba(164, 195, 178, 0.28);
+  color: #3A5347;
+  border: 1px solid rgba(107, 144, 128, 0.35);
+  border-radius: var(--radius-control);
+  padding: 10px 14px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.tab-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.tab-bar__voce {
+  padding: 8px 16px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border-color);
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.tab-bar__voce--attivo {
+  background: var(--forest);
+  border-color: var(--forest);
+  color: #FFFFFF;
+}
+
+.griglia-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 16px;
+}
+
+.campo textarea { resize: vertical; min-height: 64px; }
+
+@media (max-width: 800px) {
+  .griglia-form { grid-template-columns: 1fr; }
 }
 
 .errore-form--lotto { padding: 16px 18px; }

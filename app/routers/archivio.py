@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.auth import get_utente_corrente
-from app.models import Prescrizione, LottoMensile, Utente
+from app.models import Prescrizione, LottoMensile, Utente, DatiOcr
 
 router = APIRouter(tags=["archivio"])
 templates = Jinja2Templates(directory="app/templates")
@@ -25,12 +25,14 @@ def archivio(
     query = (
         db.query(Prescrizione)
         .join(LottoMensile, Prescrizione.lotto_id == LottoMensile.id)
+        .outerjoin(DatiOcr, DatiOcr.prescrizione_id == Prescrizione.id)
         .options(joinedload(Prescrizione.lotto), joinedload(Prescrizione.dati_ocr))
     )
     if q:
         query = query.filter(or_(
             Prescrizione.barcode.ilike(f"%{q}%"),
             LottoMensile.nome.ilike(f"%{q}%"),
+            DatiOcr.nome_farmacia.ilike(f"%{q}%"),
         ))
     prescrizioni = (
         query.order_by(LottoMensile.created_at.desc(), Prescrizione.barcode.asc())

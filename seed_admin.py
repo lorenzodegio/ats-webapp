@@ -1,10 +1,8 @@
 """
-Crea utenti, configurazione iniziale e lotti mensili demo in vari stati
-del ciclo di vita, cosi' dashboard/lotti/archivio non sono vuoti durante
-lo sviluppo del frontend.
+Crea utenti, configurazione iniziale e censimento farmacie.
 
-Uso:
-    python seed_admin.py
+Di default NON crea lotti di prova: l'app parte vuota (primo uso reale).
+Per lo sviluppo frontend: $env:SEED_DEMO_LOTTI="1"; python seed_admin.py
 """
 import getpass
 from datetime import datetime, timedelta
@@ -12,7 +10,7 @@ from datetime import datetime, timedelta
 from app.database import Base, engine, SessionLocal
 from app.models import (
     Utente, RuoloUtente, Configurazione, LottoMensile, StatoLotto,
-    Prescrizione, StatoBarcode, DatiOcr, Difformita, StatoDifformita,
+    Prescrizione, StatoBarcode, DatiOcr, Difformita, StatoDifformita, Farmacia,
 )
 from app.auth import hash_password
 from app.generatore_finto import genera_barcode, genera_dati_ocr_finti, CODICI_DIFFORMITA
@@ -68,6 +66,34 @@ def crea_configurazione(db, admin):
         db.add(Configurazione(chiave=chiave, valore=valore, descrizione=descrizione, updated_by_id=admin.id))
     db.commit()
     print("Configurazione iniziale creata.")
+
+
+FARMACIE_INIZIALI = [
+    ("FAR001", "Farmacia Tili Snc", "TILI", None, None, None),
+    ("FAR002", "Farmacia Di Lora Srl", "DI LORA", None, None, None),
+    ("FAR003", "Farmacia Pomi di dr. Collivasone A. & C. Snc", "POMI", None, None, None),
+    ("FAR004", "Farmacia Ramella dott.ri G. e A. Sas", "RAMELLA", None, None, None),
+    ("FAR005", "Farmacia Mazzucchelli F. & C. Snc", "MAZZUCCHELLI", None, None, None),
+    ("FAR006", "Farmacia Peroni dr Antonio E. & C. Sas", "PERONI", None, None, None),
+    ("FAR007", "Farmacia Comunale N.2", "COMUNALE 2", "Via Verdi 40", "Cassano Magnago", "VA"),
+    ("FAR008", "Farmacia Stefini & C Sas", None, None, None, None),
+    ("FAR009", "Farmacia Introini dr. Paolo & C. Sas", "INTROINI", None, None, None),
+    ("FAR010", "Farmacia Di Crenna", None, None, None, None),
+    ("FAR011", "Farmacia Ponti", "PONTI", None, None, None),
+]
+
+
+def crea_farmacie(db):
+    if db.query(Farmacia).count() > 0:
+        print("Farmacie gia' presenti, salto.")
+        return
+    for codice, nome, codice_regionale, indirizzo, comune, provincia in FARMACIE_INIZIALI:
+        db.add(Farmacia(
+            codice=codice, nome=nome, codice_regionale=codice_regionale,
+            indirizzo=indirizzo, comune=comune, provincia=provincia, attiva=True,
+        ))
+    db.commit()
+    print(f"Create {len(FARMACIE_INIZIALI)} farmacie nel censimento.")
 
 
 def _crea_prescrizioni(db, lotto, n, con_undefined=False, con_ocr=False, con_difformita=False, creato_il=None):
@@ -189,10 +215,16 @@ def popola_lotti_demo(db, operatore):
 
 
 if __name__ == "__main__":
+    import os
+
     db = SessionLocal()
     try:
         admin = crea_utenti(db)
         crea_configurazione(db, admin)
-        popola_lotti_demo(db, admin)
+        crea_farmacie(db)
+        if os.environ.get("SEED_DEMO_LOTTI") == "1":
+            popola_lotti_demo(db, admin)
+        else:
+            print("Nessun lotto demo: l'app parte vuota. Per i dati finti usa SEED_DEMO_LOTTI=1.")
     finally:
         db.close()

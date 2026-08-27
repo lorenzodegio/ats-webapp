@@ -172,6 +172,16 @@ def _pulisci_cartella_dati():
         cartella.mkdir(parents=True, exist_ok=True)
 
 
+def _scrivi_farmacie_per_pipeline(db: Session) -> None:
+    """Esporta le farmacie attive in ./dati/farmacie.json per prompt + matching fuzzy nel container."""
+    from app.farmacie_io import scrivi_json_pipeline
+    try:
+        percorso = scrivi_json_pipeline(db, DATI_DIR / "farmacie.json")
+        log.info(f"Elenco farmacie scritto in {percorso}")
+    except Exception as exc:
+        log.warning(f"Impossibile scrivere farmacie.json per la pipeline: {exc}")
+
+
 def _log(db: Session, elaborazione: Elaborazione, messaggio: str, livello: LivelloLog = LivelloLog.info) -> None:
     db.add(LogElaborazione(elaborazione_id=elaborazione.id, messaggio=messaggio, livello=livello))
     db.commit()
@@ -334,6 +344,7 @@ def avvia_preprocessing_reale(lotto_id) -> None:
 
         _log(db, elaborazione, f"Copio i file del lotto '{lotto.nome}' in ./dati")
         _copia_lotto_verso_dati(lotto)
+        _scrivi_farmacie_per_pipeline(db)
 
         _log(db, elaborazione, "Avvio container fase1-preprocessing")
         _esegui_container("fase1-preprocessing", db, elaborazione)
@@ -433,6 +444,7 @@ def avvia_ocr_reale(lotto_id) -> None:
         lotto.stato = StatoLotto.elaborazione_ocr
         db.commit()
 
+        _scrivi_farmacie_per_pipeline(db)
         _log(db, elaborazione, "Avvio container fase2-ocr (estrazione VLLM + arricchimento Regione)")
         _esegui_container("fase2-ocr", db, elaborazione)
 
@@ -513,6 +525,7 @@ def avvia_difformita_reale(lotto_id) -> None:
         lotto.stato = StatoLotto.analisi_difformita
         db.commit()
 
+        _scrivi_farmacie_per_pipeline(db)
         _log(db, elaborazione, "Avvio container fase3-difformita")
         _esegui_container("fase3-difformita", db, elaborazione)
 

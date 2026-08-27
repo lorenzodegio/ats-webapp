@@ -5,13 +5,13 @@
 <div class="main__header">
   <div>
     <h1>Archivio</h1>
-    <div class="sottotitolo">Storico prescrizioni, raggruppate per lotto — ricercabili per barcode o nome del lotto</div>
+    <div class="sottotitolo">Storico prescrizioni, raggruppate per lotto — ricercabili per barcode, nome lotto o farmacia</div>
   </div>
 </div>
 
 <div class="card">
   <form method="get" action="/archivio" class="filtri-riga">
-    <input type="search" name="q" value="{{ q }}" placeholder="Cerca per barcode o nome lotto…" style="min-width:260px;">
+    <input type="search" name="q" value="{{ q }}" placeholder="Cerca per barcode, lotto o farmacia…" style="min-width:260px;">
     <button type="submit" class="btn btn--secondario">Cerca</button>
     {% if q %}<a href="/archivio" class="btn btn--secondario">Azzera</a>{% endif %}
   </form>
@@ -38,6 +38,7 @@
         <thead>
           <tr>
             <th>Barcode</th>
+            <th>Farmacia</th>
             <th>Stato barcode</th>
             <th>Score OCR</th>
             <th>Difformita</th>
@@ -54,6 +55,7 @@
               —
               {% endif %}
             </td>
+            <td>{{ p.dati_ocr.nome_farmacia if p.dati_ocr and p.dati_ocr.nome_farmacia else '—' }}</td>
             <td class="mono" style="font-size:12px;">{{ p.stato_barcode.value.replace('_', ' ') }}</td>
             <td>{{ p.score_ocr or '—' }}</td>
             <td>{{ p.difformita | length }}</td>
