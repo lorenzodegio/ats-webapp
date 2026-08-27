@@ -37,6 +37,7 @@ from app.config_helper import backend_pipeline_e_reale
 from app.progresso import (
     percentuale_avanzamento, etichetta_stato, ETICHETTE_STATO,
     estrai_progresso_da_log, messaggio_fase_operatore,
+    indice_fase_wizard, FASI_WIZARD_LOTTO,
 )
 
 router = APIRouter(tags=["lotti"])
@@ -53,6 +54,34 @@ MESI_IT = ["", "GENNAIO", "FEBBRAIO", "MARZO", "APRILE", "MAGGIO", "GIUGNO",
 
 def _nome_cartella(mese: int, anno: int) -> str:
     return f"{MESI_IT[mese]}_{anno}"
+
+
+def _percorso_pdf_prescrizione(presc: Prescrizione):
+    if not presc.sp_pdf_path:
+        return None
+    candidati = [
+        os.path.normpath(os.path.join(FAKE_SP_ROOT, presc.sp_pdf_path)),
+        os.path.normpath(presc.sp_pdf_path),
+    ]
+    for percorso in candidati:
+        abs_p = os.path.abspath(percorso)
+        if not os.path.isfile(abs_p):
+            continue
+        if abs_p.startswith(os.path.abspath(FAKE_SP_ROOT)) or abs_p.startswith(os.path.abspath("dati")):
+            return abs_p
+    return None
+
+
+def _prescrizione_del_lotto(db: Session, lotto_id: str, prescrizione_id: str):
+    return (
+        db.query(Prescrizione)
+        .options(joinedload(Prescrizione.dati_ocr), joinedload(Prescrizione.difformita))
+        .filter(
+            Prescrizione.id == uuid.UUID(prescrizione_id),
+            Prescrizione.lotto_id == uuid.UUID(lotto_id),
+        )
+        .first()
+    )
 
 
 # ============================================================
@@ -226,6 +255,8 @@ def dettaglio_lotto(
                 elaborazione_attiva.fase if elaborazione_attiva else None,
                 in_pausa,
             ),
+            "fase_wizard": indice_fase_wizard(lotto.stato),
+            "fasi_wizard": FASI_WIZARD_LOTTO,
         },
     )
 
@@ -265,7 +296,31 @@ def correggi_barcode(
             lotto.n_barcode_undefined = max(0, (lotto.n_barcode_undefined or 0) - 1)
             lotto.n_barcode_letti = (lotto.n_barcode_letti or 0) + 1
     db.commit()
-    return RedirectResponse(url=f"/lotti/{lotto_id}#revisione-barcode", status_code=302)
+    return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+
+
+@router.post("/lotti/{lotto_id}/barcode/{prescrizione_id}/escludi")
+def escludi_pagina_non_fronte(
+    lotto_id: str, prescrizione_id: str,
+    db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
+):
+    presc = db.query(Prescrizione).filter(Prescrizione.id == uuid.UUID(prescrizione_id)).first()
+    if presc is None:
+        return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+    if presc.stato_barcode != StatoBarcode.undefined:
+        return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+
+    presc.stato_barcode = StatoBarcode.escluso
+    presc.barcode = None
+    presc.barcode_corretto_da_id = utente.id
+    presc.barcode_corretto_at = datetime.utcnow()
+
+    lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
+    if lotto:
+        lotto.n_barcode_undefined = max(0, (lotto.n_barcode_undefined or 0) - 1)
+        lotto.n_prescrizioni_totali = max(0, (lotto.n_prescrizioni_totali or 0) - 1)
+    db.commit()
+    return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
 
 
 @router.get("/lotti/{lotto_id}/prescrizioni/{prescrizione_id}/pdf")
@@ -287,15 +342,110 @@ def visualizza_pdf_prescrizione(
         .filter(Prescrizione.id == uuid.UUID(prescrizione_id), Prescrizione.lotto_id == uuid.UUID(lotto_id))
         .first()
     )
-    if presc is None or not presc.sp_pdf_path:
+    if presc is None:
         return JSONResponse({"errore": "Prescrizione o file non trovati"}, status_code=404)
 
-    radice = os.path.normpath(FAKE_SP_ROOT)
-    percorso = os.path.normpath(os.path.join(FAKE_SP_ROOT, presc.sp_pdf_path))
-    if not percorso.startswith(radice + os.sep) or not os.path.isfile(percorso):
+    percorso = _percorso_pdf_prescrizione(presc)
+    if percorso is None:
         return JSONResponse({"errore": "File non accessibile"}, status_code=404)
 
     return FileResponse(percorso, media_type="application/pdf", filename=os.path.basename(percorso))
+
+
+ETICHETTE_CAMPO_OCR = {
+    "cognome_nome_assistito": "Cognome / Nome assistito",
+    "codice_fiscale": "Codice fiscale",
+    "codice_esenzione": "Codice esenzione",
+    "codice_atc": "Codice ATC",
+    "testo_prescrizione": "Testo prescrizione",
+    "metodo_estrattivo_olio": "Metodo estrattivo olio",
+    "forma_farmaceutica": "Forma farmaceutica",
+    "data_prescrizione": "Data prescrizione",
+    "data_etichetta_preparazione": "Data preparazione etichetta",
+    "data_invio": "Data invio / emissione",
+    "etichetta_data_scadenza": "Data scadenza etichetta",
+    "timbro_medico": "Timbro medico",
+    "firma_medico": "Firma medico",
+    "etichetta_nome_cognome_medico": "Nome medico (etichetta)",
+    "etichetta_nome_cognome_paziente": "Nome paziente (etichetta)",
+    "etichetta_prezzo_sost": "Prezzo sost. (etichetta)",
+    "etichetta_prezzo_on": "Prezzo on. (etichetta)",
+    "etichetta_prezzo_rec": "Prezzo rec. (etichetta)",
+    "etichetta_prezzo_iva": "IVA (etichetta)",
+    "etichetta_prezzo_tot": "Totale (etichetta)",
+    "totale_prescrizione": "Totale prescrizione",
+    "etichetta_thc": "THC (etichetta)",
+    "nome_farmacia": "Nome farmacia",
+    "etichetta_avvertenze": "Avvertenze (etichetta)",
+}
+
+
+def _ctx_revisione(request, utente, lotto, presc, modo):
+    return {
+        "request": request, "utente": utente, "voce_attiva": "elaborazioni",
+        "lotto": lotto, "presc": presc, "modo": modo,
+        "fase_wizard": indice_fase_wizard(lotto.stato),
+        "fasi_wizard": FASI_WIZARD_LOTTO,
+        "etichette_ocr": ETICHETTE_CAMPO_OCR,
+        "campi_booleani": ("timbro_medico", "firma_medico"),
+        "campi_area": ("testo_prescrizione", "etichetta_avvertenze"),
+        "valori_ocr": {},
+        "da_gestire": [],
+    }
+
+
+@router.get("/lotti/{lotto_id}/prescrizioni/{prescrizione_id}/revisione-barcode", response_class=HTMLResponse)
+def pagina_revisione_barcode(
+    request: Request, lotto_id: str, prescrizione_id: str,
+    db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
+):
+    lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
+    presc = _prescrizione_del_lotto(db, lotto_id, prescrizione_id)
+    if lotto is None or presc is None:
+        return RedirectResponse(url="/lotti", status_code=302)
+    return templates.TemplateResponse(
+        "revisione_dettaglio.html",
+        _ctx_revisione(request, utente, lotto, presc, "barcode"),
+    )
+
+
+@router.get("/lotti/{lotto_id}/prescrizioni/{prescrizione_id}/revisione-ocr", response_class=HTMLResponse)
+def pagina_revisione_ocr(
+    request: Request, lotto_id: str, prescrizione_id: str,
+    db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
+):
+    lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
+    presc = _prescrizione_del_lotto(db, lotto_id, prescrizione_id)
+    if lotto is None or presc is None:
+        return RedirectResponse(url="/lotti", status_code=302)
+    valori_ocr = {}
+    if presc.dati_ocr:
+        if presc.dati_ocr.json_corretto:
+            valori_ocr = dict(presc.dati_ocr.json_corretto)
+        else:
+            for col in COLONNE_DATI_OCR:
+                v = getattr(presc.dati_ocr, col, None)
+                if isinstance(v, (date, datetime)):
+                    valori_ocr[col] = v.isoformat()
+                elif v is not None:
+                    valori_ocr[col] = v
+    ctx = _ctx_revisione(request, utente, lotto, presc, "ocr")
+    ctx["valori_ocr"] = valori_ocr
+    return templates.TemplateResponse("revisione_dettaglio.html", ctx)
+
+
+@router.get("/lotti/{lotto_id}/prescrizioni/{prescrizione_id}/revisione-difformita", response_class=HTMLResponse)
+def pagina_revisione_difformita(
+    request: Request, lotto_id: str, prescrizione_id: str,
+    db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
+):
+    lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
+    presc = _prescrizione_del_lotto(db, lotto_id, prescrizione_id)
+    if lotto is None or presc is None:
+        return RedirectResponse(url="/lotti", status_code=302)
+    ctx = _ctx_revisione(request, utente, lotto, presc, "difformita")
+    ctx["da_gestire"] = [d for d in presc.difformita if d.stato == StatoDifformita.rilevata]
+    return templates.TemplateResponse("revisione_dettaglio.html", ctx)
 
 
 @router.post("/lotti/{lotto_id}/avvia-ocr")
@@ -330,6 +480,7 @@ def avvia_difformita(
 def gestisci_difformita(
     lotto_id: str, difformita_id: str, azione: str,
     db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
+    next: str = Form(""),
 ):
     if azione not in ("conferma", "escludi"):
         return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
@@ -340,7 +491,9 @@ def gestisci_difformita(
         d.gestita_da_id = utente.id
         d.gestita_at = datetime.utcnow()
         db.commit()
-    return RedirectResponse(url=f"/lotti/{lotto_id}#revisione-difformita", status_code=302)
+    if next.startswith(f"/lotti/{lotto_id}/"):
+        return RedirectResponse(url=next, status_code=302)
+    return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
 
 
 COLONNE_DATI_OCR = [
@@ -444,8 +597,18 @@ def export_zip(
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
         prescrizioni = lotto.prescrizioni
-        gruppi_farmacia = {}
+        da_includere = []
         for p in prescrizioni:
+            if p.stato_barcode == StatoBarcode.escluso:
+                continue
+            confermate = [d for d in p.difformita if d.stato == StatoDifformita.confermata]
+            da_includere.append((p, confermate))
+        if not any(c for _, c in da_includere):
+            da_includere = [(p, True) for p in prescrizioni if p.stato_barcode != StatoBarcode.escluso]
+        else:
+            da_includere = [(p, c) for p, c in da_includere if c]
+        gruppi_farmacia = {}
+        for p, _conf in da_includere:
             nome_farmacia = "FARMACIA_SCONOSCIUTA"
             if p.dati_ocr and p.dati_ocr.nome_farmacia:
                 nome_farmacia = p.dati_ocr.nome_farmacia.strip()
@@ -458,11 +621,10 @@ def export_zip(
 
         for nome_cartella, prescs in gruppi_farmacia.items():
             for p in prescs:
-                if p.sp_pdf_path:
-                    percorso_pdf = os.path.join(FAKE_SP_ROOT, p.sp_pdf_path)
-                    if os.path.exists(percorso_pdf):
-                        nome_pdf = os.path.basename(p.sp_pdf_path)
-                        zip_file.write(percorso_pdf, arcname=f"{nome_cartella}/{nome_pdf}")
+                percorso_pdf = _percorso_pdf_prescrizione(p)
+                if percorso_pdf:
+                    nome_pdf = os.path.basename(p.sp_pdf_path or percorso_pdf)
+                    zip_file.write(percorso_pdf, arcname=f"{nome_cartella}/{nome_pdf}")
             
             barcodes_gruppo = [p.barcode for p in prescs if p.barcode]
             barcodes_set = set(barcodes_gruppo)
@@ -587,6 +749,9 @@ async def correggi_ocr(
     presc.stato_revisione = StatoRevisionePrescrizione.corretto
     
     db.commit()
+    torna = form_data.get("torna_elenco")
+    if torna:
+        return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
     return {"stato": "ok"}
 
 

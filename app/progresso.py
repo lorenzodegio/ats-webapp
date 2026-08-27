@@ -69,6 +69,31 @@ STATI_IN_ELABORAZIONE_AUTOMATICA = {
 }
 
 
+FASI_WIZARD_LOTTO = [
+    (1, "Dati lotto"),
+    (2, "Caricamento"),
+    (3, "Preprocessing"),
+    (4, "OCR"),
+    (5, "Difformità"),
+    (6, "Cartelle farmacie"),
+]
+
+
+def indice_fase_wizard(stato: StatoLotto) -> int:
+    """Step visivo 1–6 del lotto in elaborazione (dopo la creazione)."""
+    if stato in (StatoLotto.bozza, StatoLotto.caricamento):
+        return 2
+    if stato in (StatoLotto.preprocessing, StatoLotto.revisione_barcode):
+        return 3
+    if stato in (StatoLotto.elaborazione_ocr, StatoLotto.revisione_qualita):
+        return 4
+    if stato in (StatoLotto.analisi_difformita, StatoLotto.revisione_difformita):
+        return 5
+    if stato in (StatoLotto.completato, StatoLotto.archiviato):
+        return 6
+    return 3
+
+
 def percentuale_avanzamento(stato: StatoLotto) -> int:
     if stato == StatoLotto.eccezione:
         return 100

@@ -15,21 +15,8 @@
   <div>{% include "_badge_stato.html" %}</div>
 </div>
 
-{% if lotto.stato.value not in ["completato", "archiviato", "eccezione"] %}
-<div class="wizard-steps" style="margin-bottom: 24px;">
-  <div class="wizard-step wizard-step--completato">
-    <span class="wizard-step__numero">1</span>Dati lotto
-  </div>
-  <div class="wizard-step wizard-step--completato">
-    <span class="wizard-step__numero">2</span>Caricamento
-  </div>
-  <div class="wizard-step wizard-step--completato">
-    <span class="wizard-step__numero">3</span>Conferma
-  </div>
-  <div class="wizard-step wizard-step--attivo">
-    <span class="wizard-step__numero">4</span>Monitoraggio
-  </div>
-</div>
+{% if lotto.stato.value not in ["archiviato"] %}
+{% include "_wizard_fasi_lotto.html" %}
 {% endif %}
 
 {% if lotto.stato.value == "eccezione" %}
@@ -123,7 +110,7 @@
   <h2 class="card__titolo">Revisione barcode</h2>
   {% if prescrizioni_undefined %}
     <p style="font-size:13px; color: var(--text-secondary); margin-top:-8px;">
-      {{ prescrizioni_undefined | length }} prescrizioni con barcode non leggibile. Correggile per poter avviare l'OCR.
+      {{ prescrizioni_undefined | length }} pagine senza barcode. Apri ciascuna per vedere il PDF: inserisci il codice oppure escludi se non è un fronte di prescrizione.
     </p>
     <table class="tabella">
       <thead><tr><th>File</th><th>Correggi barcode</th><th></th></tr></thead>
@@ -132,7 +119,7 @@
         <tr>
           <td class="mono" style="font-size:12px;">
             {% if p.sp_pdf_path %}
-            <a href="/lotti/{{ lotto.id }}/prescrizioni/{{ p.id }}/pdf" target="_blank" rel="noopener" class="link-barcode" title="Apri la prescrizione in una nuova scheda">{{ p.sp_pdf_path.split('/')[-1] }}<span class="link-barcode__icona" aria-hidden="true">↗</span></a>
+            <a href="/lotti/{{ lotto.id }}/prescrizioni/{{ p.id }}/revisione-barcode" class="link-barcode">{{ p.sp_pdf_path.split('/')[-1] }}</a>
             {% else %}
             —
             {% endif %}
@@ -161,16 +148,16 @@
 <div class="card">
   <h2 class="card__titolo">Revisione qualita OCR</h2>
   <p style="font-size:13px; color: var(--text-secondary); margin-top:-8px;">
-    Soglia di qualita: 80/100. Le prescrizioni sotto soglia sono evidenziate.
+    Clicca un barcode per vedere il PDF e i campi riconosciuti, modificarli e tornare all'elenco.
   </p>
   <table class="tabella">
     <thead><tr><th>Barcode</th><th>Farmacia</th><th>Score OCR</th><th>Campi compilati</th><th>Match Excel</th></tr></thead>
     <tbody>
-      {% for p in lotto.prescrizioni %}
+      {% for p in lotto.prescrizioni if p.stato_barcode.value != 'escluso' %}
       <tr>
         <td class="mono">
           {% if p.barcode %}
-          <a href="/lotti/{{ lotto.id }}/prescrizioni/{{ p.id }}/pdf" target="_blank" rel="noopener" class="link-barcode" title="Apri la prescrizione in una nuova scheda">{{ p.barcode }}<span class="link-barcode__icona" aria-hidden="true">↗</span></a>
+          <a href="/lotti/{{ lotto.id }}/prescrizioni/{{ p.id }}/revisione-ocr" class="link-barcode">{{ p.barcode }}</a>
           {% else %}
           —
           {% endif %}
@@ -221,7 +208,7 @@
           <td>{{ d.descrizione }}</td>
           <td class="mono">
             {% if d.prescrizione and d.prescrizione.barcode %}
-            <a href="/lotti/{{ lotto.id }}/prescrizioni/{{ d.prescrizione.id }}/pdf" target="_blank" rel="noopener" class="link-barcode" title="Apri la prescrizione in una nuova scheda">{{ d.prescrizione.barcode }}<span class="link-barcode__icona" aria-hidden="true">↗</span></a>
+            <a href="/lotti/{{ lotto.id }}/prescrizioni/{{ d.prescrizione.id }}/revisione-difformita" class="link-barcode">{{ d.prescrizione.barcode }}</a>
             {% else %}
             —
             {% endif %}
@@ -250,16 +237,16 @@
 {# ---------------- Completato / Archiviato ---------------- #}
 {% if lotto.stato.value == "completato" %}
 <div class="card">
-  <h2 class="card__titolo">Lotto completato</h2>
-  <p style="font-size:14px;">Tutte le fasi sono concluse. Archivia il lotto per spostarlo in <span class="mono">ARCHIVIO/ELABORAZIONI PASSATE</span>.</p>
-  {% if lotto.excel_output_filename %}
+  <h2 class="card__titolo">Cartelle farmacie</h2>
+  <p style="font-size:14px;">Lo ZIP contiene una cartella per farmacia con le prescrizioni che hanno difformità confermate.</p>
   <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px;">
-    <a href="/lotti/{{ lotto.id }}/output-excel" target="_blank" rel="noopener" class="btn btn--primario">📊 Apri file Excel</a>
-    <a href="/lotti/{{ lotto.id }}/export-zip" class="btn btn--secondario">📦 Esporta ZIP Farmacie</a>
+    <a href="/lotti/{{ lotto.id }}/export-zip" class="btn btn--primario">Scarica ZIP cartelle farmacie</a>
+    {% if lotto.excel_output_filename %}
+    <a href="/lotti/{{ lotto.id }}/output-excel" target="_blank" rel="noopener" class="btn btn--secondario">Apri file Excel</a>
+    {% endif %}
   </div>
-  {% endif %}
   <form method="post" action="/lotti/{{ lotto.id }}/archivia">
-    <button type="submit" class="btn btn--primario">Archivia lotto</button>
+    <button type="submit" class="btn btn--secondario">Archivia lotto</button>
   </form>
 </div>
 {% elif lotto.stato.value == "archiviato" %}

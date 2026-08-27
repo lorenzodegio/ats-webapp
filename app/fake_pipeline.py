@@ -210,7 +210,10 @@ def avvia_ocr_fake(lotto_id) -> None:
         _log(db, elaborazione, "Avvio estrazione OCR (Qwen2.5-VL) sulle prescrizioni")
         time.sleep(1)
 
-        prescrizioni = db.query(Prescrizione).filter(Prescrizione.lotto_id == lotto.id).all()
+        prescrizioni = db.query(Prescrizione).filter(
+            Prescrizione.lotto_id == lotto.id,
+            Prescrizione.stato_barcode != StatoBarcode.escluso,
+        ).all()
         totale = len(prescrizioni)
         n_match = 0
         somma_score = 0.0
