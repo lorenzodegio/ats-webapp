@@ -9,7 +9,7 @@ import io
 import zipfile
 import re
 import pandas as pd
-from datetime import datetime, date
+from pathlib import Path
 
 from fastapi import APIRouter, Request, Depends, Form, UploadFile, File, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse, Response
@@ -56,19 +56,59 @@ def _nome_cartella(mese: int, anno: int) -> str:
     return f"{MESI_IT[mese]}_{anno}"
 
 
-def _percorso_pdf_prescrizione(presc: Prescrizione):
-    if not presc.sp_pdf_path:
-        return None
-    candidati = [
-        os.path.normpath(os.path.join(FAKE_SP_ROOT, presc.sp_pdf_path)),
-        os.path.normpath(presc.sp_pdf_path),
-    ]
-    for percorso in candidati:
-        abs_p = os.path.abspath(percorso)
-        if not os.path.isfile(abs_p):
+def _sotto_cartella_consentita(percorso: Path) -> bool:
+    risolto = percorso.resolve()
+    for radice in (Path(FAKE_SP_ROOT).resolve(), Path("dati").resolve()):
+        try:
+            risolto.relative_to(radice)
+            return True
+        except ValueError:
             continue
-        if abs_p.startswith(os.path.abspath(FAKE_SP_ROOT)) or abs_p.startswith(os.path.abspath("dati")):
-            return abs_p
+    return False
+
+
+def _percorso_pdf_prescrizione(presc: Prescrizione):
+    rels = []
+    if presc.sp_pdf_path:
+        rel = presc.sp_pdf_path.replace("\\", "/")
+        rels.append(rel)
+        rels.append(Path(rel).name)
+        stem = Path(rel).stem
+        rels.append(f"dati/ricette_staging/pdfs/{stem}.pdf")
+        rels.append(f"dati/ricette/{stem}.pdf")
+    if presc.sp_png_path:
+        png = Path(presc.sp_png_path.replace("\\", "/"))
+        rels.append(str(png.with_suffix(".pdf")))
+        rels.append(f"dati/ricette_staging/pdfs/{png.stem}.pdf")
+
+    visti = set()
+    for rel in rels:
+        if not rel or rel in visti:
+            continue
+        visti.add(rel)
+        for base in (Path("."), Path(FAKE_SP_ROOT)):
+            candidato = (base / rel).resolve()
+            if candidato.is_file() and _sotto_cartella_consentita(candidato):
+                return str(candidato)
+    if presc.sp_pdf_path:
+        stem = Path(presc.sp_pdf_path.replace("\\", "/")).stem
+        for cartella in (Path("dati/ricette_staging"), Path("dati/ricette")):
+            if not cartella.is_dir():
+                continue
+            for trovato in cartella.rglob(f"{stem}.pdf"):
+                if trovato.is_file() and _sotto_cartella_consentita(trovato):
+                    return str(trovato.resolve())
+    return None
+
+
+def _percorso_png_prescrizione(presc: Prescrizione):
+    if not presc.sp_png_path:
+        return None
+    rel = presc.sp_png_path.replace("\\", "/")
+    for base in (Path("."), Path(FAKE_SP_ROOT)):
+        candidato = (base / rel).resolve()
+        if candidato.is_file() and _sotto_cartella_consentita(candidato):
+            return str(candidato)
     return None
 
 
@@ -347,9 +387,21 @@ def visualizza_pdf_prescrizione(
 
     percorso = _percorso_pdf_prescrizione(presc)
     if percorso is None:
+        png = _percorso_png_prescrizione(presc)
+        if png:
+            return FileResponse(
+                png,
+                media_type="image/png",
+                headers={"Content-Disposition": f'inline; filename="{os.path.basename(png)}"'},
+            )
         return JSONResponse({"errore": "File non accessibile"}, status_code=404)
 
-    return FileResponse(percorso, media_type="application/pdf", filename=os.path.basename(percorso))
+    nome = os.path.basename(percorso)
+    return FileResponse(
+        percorso,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{nome}"'},
+    )
 
 
 ETICHETTE_CAMPO_OCR = {
