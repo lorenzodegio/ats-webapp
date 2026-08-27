@@ -34,7 +34,10 @@ from app.real_pipeline import (
     metti_in_pausa_container, riprendi_container, annulla_container,
 )
 from app.config_helper import backend_pipeline_e_reale
-from app.progresso import percentuale_avanzamento, etichetta_stato, ETICHETTE_STATO, estrai_progresso_da_log
+from app.progresso import (
+    percentuale_avanzamento, etichetta_stato, ETICHETTE_STATO,
+    estrai_progresso_da_log, messaggio_fase_operatore,
+)
 
 router = APIRouter(tags=["lotti"])
 templates = Jinja2Templates(directory="app/templates")
@@ -200,11 +203,11 @@ def dettaglio_lotto(
     difformita_da_gestire = [d for d in difformita_lotto if d.stato == StatoDifformita.rilevata]
 
     elaborazione_attiva = lotto.elaborazione_attiva
-    log_recenti = []
     progresso_item = None
+    in_pausa = False
     if elaborazione_attiva:
-        log_recenti = sorted(elaborazione_attiva.log, key=lambda l: l.timestamp)[-20:]
         progresso_item = estrai_progresso_da_log(elaborazione_attiva.log)
+        in_pausa = elaborazione_attiva.richiesta_controllo == "pausa"
 
     return templates.TemplateResponse(
         "lotto_detail.html",
@@ -217,9 +220,12 @@ def dettaglio_lotto(
             "difformita_lotto": difformita_lotto,
             "difformita_da_gestire": difformita_da_gestire,
             "elaborazione_attiva": elaborazione_attiva,
-            "log_recenti": log_recenti,
             "progresso_item": progresso_item,
-            "in_pausa": elaborazione_attiva.richiesta_controllo == "pausa" if elaborazione_attiva else False,
+            "in_pausa": in_pausa,
+            "messaggio_operatore": messaggio_fase_operatore(
+                elaborazione_attiva.fase if elaborazione_attiva else None,
+                in_pausa,
+            ),
         },
     )
 
@@ -745,15 +751,12 @@ def stato_lotto(lotto_id: str, db: Session = Depends(get_db), utente: Utente = D
         return JSONResponse({"errore": "lotto non trovato"}, status_code=404)
 
     elaborazione_attiva = lotto.elaborazione_attiva
-    log_tail = []
     progresso_item = None
+    in_pausa = False
     if elaborazione_attiva:
         log_ordinato = sorted(elaborazione_attiva.log, key=lambda l: l.timestamp)
-        log_tail = [
-            {"livello": l.livello.value, "messaggio": l.messaggio, "timestamp": l.timestamp.strftime("%H:%M:%S")}
-            for l in log_ordinato[-10:]
-        ]
         progresso_item = estrai_progresso_da_log(log_ordinato)
+        in_pausa = elaborazione_attiva.richiesta_controllo == "pausa"
 
     return {
         "id": str(lotto.id),
@@ -762,9 +765,12 @@ def stato_lotto(lotto_id: str, db: Session = Depends(get_db), utente: Utente = D
         "etichetta_stato": etichetta_stato(lotto.stato),
         "percentuale": percentuale_avanzamento(lotto.stato),
         "fase_attiva": elaborazione_attiva.fase.value if elaborazione_attiva else None,
+        "messaggio_operatore": messaggio_fase_operatore(
+            elaborazione_attiva.fase if elaborazione_attiva else None,
+            in_pausa,
+        ),
         "richiesta_controllo": elaborazione_attiva.richiesta_controllo if elaborazione_attiva else None,
         "progresso_item": progresso_item,
-        "log_recenti": log_tail,
         "n_prescrizioni_totali": lotto.n_prescrizioni_totali,
         "n_barcode_undefined": lotto.n_barcode_undefined,
         "n_difformita_totali": lotto.n_difformita_totali,

@@ -18,7 +18,9 @@
           if (!risposta.ok) return;
           const dati = await risposta.json();
 
-          const etichettaFase = dati.fase_attiva ? `${dati.etichetta_stato} · ${dati.fase_attiva}` : dati.etichetta_stato;
+          const etichettaFase = dati.messaggio_operatore
+            ? `${dati.etichetta_stato} · ${dati.messaggio_operatore}`
+            : dati.etichetta_stato;
           riga.querySelector(".job-attivo-riga__fase").textContent = etichettaFase;
           riga.querySelector(".barra-progresso__riempimento").style.width = `${dati.percentuale}%`;
 

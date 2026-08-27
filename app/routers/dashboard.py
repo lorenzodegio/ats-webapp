@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
 from app.auth import get_utente_corrente
 from app.models import LottoMensile, StatoLotto, Prescrizione, Difformita, Utente
-from app.progresso import percentuale_avanzamento, etichetta_stato
+from app.progresso import percentuale_avanzamento, etichetta_stato, messaggio_fase_operatore
 
 router = APIRouter(tags=["dashboard"])
 templates = Jinja2Templates(directory="app/templates")
@@ -48,6 +48,10 @@ def dashboard(
             "percentuale": percentuale_avanzamento(l.stato),
             "etichetta_stato": etichetta_stato(l.stato),
             "elaborazione_attiva": l.elaborazione_attiva,
+            "messaggio_operatore": messaggio_fase_operatore(
+                l.elaborazione_attiva.fase if l.elaborazione_attiva else None,
+                l.elaborazione_attiva.richiesta_controllo == "pausa" if l.elaborazione_attiva else False,
+            ) if l.elaborazione_attiva else None,
         }
         for l in lotti_attivi
     ]

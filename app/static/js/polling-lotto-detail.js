@@ -1,6 +1,6 @@
 /* polling-lotto-detail.js
    Nella pagina di dettaglio di un lotto:
-   1. Aggiorna avanzamento e log via polling finché l'elaborazione automatica
+   1. Aggiorna avanzamento via polling finché l'elaborazione automatica
       in corso non si conclude, poi ricarica la pagina.
    2. Gestisce l'apertura del modal di confronto/correzione OCR.
    3. Gestisce il filtro client-side per gravità difformità.
@@ -19,7 +19,9 @@
     const formPausa = document.getElementById("form-pausa");
     const formRiprendi = document.getElementById("form-riprendi");
     const progressoItemEl = document.getElementById("progresso-item-dettaglio");
-    const console_ = document.getElementById("console-log");
+    const statoMacchina = document.getElementById("stato-macchina");
+    const statoTitolo = document.getElementById("stato-macchina-titolo");
+    const statoMessaggio = document.getElementById("stato-macchina-messaggio");
 
     async function aggiorna() {
       try {
@@ -44,11 +46,11 @@
             : "";
         }
 
-        if (console_) {
-          console_.innerHTML = dati.log_recenti
-            .map((r) => `<div class="console-log__riga console-log__riga--${r.livello}">${r.timestamp} &middot; ${r.messaggio}</div>`)
-            .join("");
-          console_.scrollTop = console_.scrollHeight;
+        if (statoMacchina) {
+          const inPausa = dati.richiesta_controllo === "pausa";
+          statoMacchina.classList.toggle("stato-macchina--pausa", inPausa);
+          if (statoTitolo) statoTitolo.textContent = inPausa ? "In pausa" : "Lavorazione automatica";
+          if (statoMessaggio) statoMessaggio.textContent = dati.messaggio_operatore || "Elaborazione in corso.";
         }
 
         if (!dati.fase_attiva) {
