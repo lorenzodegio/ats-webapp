@@ -31,9 +31,17 @@
       </nav>
       {% if utente %}
       <div class="sidebar__footer">
-        {{ utente.nome_completo }}<br>
-        <span style="opacity:0.7">{{ utente.ruolo.value if utente.ruolo.value else utente.ruolo }}</span>
-        <a href="/logout">Esci</a>
+        <details class="sidebar-user">
+          <summary class="sidebar-user__summary">
+            <span class="sidebar-user__avatar" aria-hidden="true">{{ utente.nome_completo[:1] | upper }}</span>
+            <span class="sidebar-user__testo">
+              <span class="sidebar-user__nome">{{ utente.nome_completo }}</span>
+              <span class="sidebar-user__ruolo">{{ utente.ruolo.value }}</span>
+            </span>
+            <span class="sidebar-user__chevron" aria-hidden="true"></span>
+          </summary>
+          <a class="sidebar-user__logout" href="/logout">Esci e cambia utente</a>
+        </details>
       </div>
       {% endif %}
     </aside>

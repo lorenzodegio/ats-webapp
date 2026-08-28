@@ -25,7 +25,15 @@ python seed_admin.py          # crea utenti + configurazione + lotti demo
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Poi apri http://localhost:8000. Utenti demo:
+Poi apri http://localhost:8000.
+
+Documentazione di consegna:
+
+- `docs/TEST_PIANO.md` — avvio Docker/Ubuntu, FAQ tecniche, piano di test (Francesco / Alessandro)
+- `docs/CHECKLIST_TEST.md` — checklist da spuntare
+- `docs/GUIDA_ATS.md` — guida operatori con screenshot (`docs/screen/`)
+
+Utenti demo (se `SEED_DEMO_UTENTI=1`):
 
 | Utente     | Password       | Ruolo          |
 |------------|----------------|----------------|
