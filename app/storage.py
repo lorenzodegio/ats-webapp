@@ -86,24 +86,45 @@ def relativo_a_radice(percorso: Path) -> str:
 
 
 def salva_pdf_caricato(lotto_id, nome_file: str, contenuto: bytes) -> str:
-    dest = cartella_originale_lotto(lotto_id) / Path(nome_file).name
+    """
+    Salva un PDF caricato in originale/. Nome univoco garantito (aggiunge
+    un suffisso numerico in caso di collisione): con il caricamento a
+    cartella si possono ricevere più file in sequenza, anche con nomi
+    ripetuti (es. due sottocartelle diverse con lo stesso "scan1.pdf") —
+    senza questo, il secondo sovrascriverebbe in silenzio il primo.
+    """
+    cartella = cartella_originale_lotto(lotto_id)
+    nome_pulito = Path(nome_file).name
+    dest = cartella / nome_pulito
+    contatore = 1
+    while dest.exists():
+        contatore += 1
+        dest = cartella / f"{Path(nome_pulito).stem}_{contatore}{Path(nome_pulito).suffix}"
     dest.write_bytes(contenuto)
     return relativo_a_radice(dest)
 
 
-def pdf_originale_lotto(lotto) -> Path:
+def pdf_originali_lotto(lotto) -> list:
+    """
+    Tutti i PDF caricati come input originale del lotto — uno solo (PDF
+    combinato multi-pagina) o molti (cartella di PDF già separati): il
+    preprocessing (phase1_preprocess.py) itera gia' tutti i file trovati
+    nella cartella di input, quindi non fa differenza per la pipeline.
+    Cerca prima nella cartella media locale, poi come fallback nella
+    cartella PRESCRIZIONI dello storage permanente.
+    """
     cartella = MEDIA_ROOT / "lotti" / str(lotto.id) / "originale"
     if cartella.is_dir():
         trovati = sorted(cartella.glob("*.pdf"))
         if trovati:
-            return trovati[0]
+            return trovati
     if lotto.sp_prescrizioni_path:
         sp = radice_sharepoint() / lotto.sp_prescrizioni_path
         if sp.is_dir():
             trovati = sorted(sp.glob("*.pdf"))
             if trovati:
-                return trovati[0]
-    return None
+                return trovati
+    return []
 
 
 def pubblica_file(lotto_id, sorgente: Path, nome: str = None):

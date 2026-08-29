@@ -49,7 +49,7 @@ from app.storage import (
     RICETTE_STAGING_PDFS,
     cartella_pagine_lotto,
     nome_file_sicuro,
-    pdf_originale_lotto,
+    pdf_originali_lotto,
     pubblica_file,
     pubblica_output_preprocessing,
     radice_sharepoint,
@@ -371,17 +371,12 @@ def _normalizza_dati_ocr(dati_grezzi: dict) -> dict:
 
 
 def _copia_lotto_verso_dati(lotto: LottoMensile) -> None:
-    """Copia il PDF combinato e l'Excel Regione del lotto dallo storage permanente a ./dati."""
+    """Copia i PDF (uno o piu': PDF combinato oppure cartella di PDF separati)
+    e l'Excel Regione del lotto dallo storage permanente a ./dati."""
     _pulisci_cartella_dati()
 
-    originale = pdf_originale_lotto(lotto)
-    if originale is not None:
+    for originale in pdf_originali_lotto(lotto):
         shutil.copy2(originale, RICETTE_RAW / originale.name)
-    elif lotto.sp_prescrizioni_path:
-        cartella_prescrizioni = radice_sharepoint() / lotto.sp_prescrizioni_path
-        if cartella_prescrizioni.exists():
-            for pdf in cartella_prescrizioni.glob("*.pdf"):
-                shutil.copy2(pdf, RICETTE_RAW / pdf.name)
 
     if lotto.excel_input_filename and lotto.sp_lavoro_path:
         cartella_lavoro = radice_sharepoint() / lotto.sp_lavoro_path

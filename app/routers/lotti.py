@@ -11,6 +11,7 @@ import zipfile
 import re
 from datetime import datetime, date
 from pathlib import Path
+from typing import List
 
 from fastapi import APIRouter, Request, Depends, Form, UploadFile, File, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse, Response
@@ -142,7 +143,8 @@ def crea_lotto(
     nome: str = Form(""),
     mese: int = Form(...),
     anno: int = Form(...),
-    file_pdf: UploadFile = File(...),
+    file_pdf: UploadFile = File(None),
+    files_cartella: List[UploadFile] = File(None),
     file_excel: UploadFile = File(...),
     db: Session = Depends(get_db),
     utente: Utente = Depends(get_utente_corrente),
@@ -165,9 +167,26 @@ def crea_lotto(
             status_code=302,
         )
 
-    _, ext_pdf = os.path.splitext(file_pdf.filename or "")
-    if ext_pdf.lower() not in ESTENSIONI_PDF_VALIDE:
-        return RedirectResponse(url="/lotti/nuovo?errore=Il+file+prescrizioni+deve+essere+un+PDF", status_code=302)
+    # Due modalita' alternative per le prescrizioni: un PDF combinato
+    # multi-pagina (caricamento storico), oppure una cartella con piu' PDF
+    # gia' separati (uno per ricetta) — il preprocessing itera comunque
+    # tutti i file trovati, quindi il resto della pipeline non fa differenza.
+    file_pdf_valido = file_pdf is not None and bool(file_pdf.filename)
+    file_cartella_validi = [
+        f for f in (files_cartella or [])
+        if f.filename and os.path.splitext(f.filename)[1].lower() in ESTENSIONI_PDF_VALIDE
+    ]
+
+    if not file_pdf_valido and not file_cartella_validi:
+        return RedirectResponse(
+            url="/lotti/nuovo?errore=Carica+un+PDF+combinato+oppure+una+cartella+di+PDF",
+            status_code=302,
+        )
+
+    if file_pdf_valido:
+        _, ext_pdf = os.path.splitext(file_pdf.filename or "")
+        if ext_pdf.lower() not in ESTENSIONI_PDF_VALIDE:
+            return RedirectResponse(url="/lotti/nuovo?errore=Il+file+prescrizioni+deve+essere+un+PDF", status_code=302)
 
     # L'Excel Regione e' obbligatorio: senza, pipeline.esegui_merge_regione
     # viene saltato (vedi pipeline.py) e i check 14/17/18 in fase difformita
@@ -211,24 +230,25 @@ def crea_lotto(
     db.commit()
     db.refresh(lotto)
 
-    # PDF combinato: salvato SOLO come input locale per la pipeline
-    # (media/lotti/{id}/originale/, letto da _copia_lotto_verso_dati in
-    # real_pipeline.py) — non viene piu' copiato anche su SharePoint in
-    # PRESCRIZIONI. Quella cartella deve contenere le ricette gia' divise
-    # per singola prescrizione, non il PDF multi-pagina originale:
-    # avvia_preprocessing_reale le pubblica li' a fine preprocessing
-    # (vedi _pubblica_prescrizioni_su_sharepoint).
+    # PDF: salvati SOLO come input locale per la pipeline (media/lotti/{id}/
+    # originale/, letto da _copia_lotto_verso_dati in real_pipeline.py) —
+    # non copiati anche su SharePoint in PRESCRIZIONI. Quella cartella deve
+    # contenere le ricette gia' divise per singola prescrizione, non i PDF
+    # originali: avvia_preprocessing_reale li pubblica li' a fine
+    # preprocessing (vedi _pubblica_prescrizioni_su_sharepoint).
     os.makedirs(UPLOAD_DIR_TEMP, exist_ok=True)
-    contenuto_pdf = file_pdf.file.read()
-    percorso_locale_pdf = salva_pdf_caricato(lotto.id, file_pdf.filename, contenuto_pdf)
 
-    db.add(CaricamentoFile(
-        lotto_id=lotto.id, tipo=TipoCaricamento.pdf_combined,
-        nome_file_locale=file_pdf.filename, nome_file_sp=file_pdf.filename,
-        percorso_sp=percorso_locale_pdf, dimensione_bytes=len(contenuto_pdf),
-        stato=StatoCaricamento.completato, caricato_da_id=utente.id,
-        started_at=datetime.utcnow(), completed_at=datetime.utcnow(),
-    ))
+    file_pdf_da_salvare = [file_pdf] if file_pdf_valido else file_cartella_validi
+    for f in file_pdf_da_salvare:
+        contenuto_pdf = f.file.read()
+        percorso_locale_pdf = salva_pdf_caricato(lotto.id, f.filename, contenuto_pdf)
+        db.add(CaricamentoFile(
+            lotto_id=lotto.id, tipo=TipoCaricamento.pdf_combined,
+            nome_file_locale=f.filename, nome_file_sp=f.filename,
+            percorso_sp=percorso_locale_pdf, dimensione_bytes=len(contenuto_pdf),
+            stato=StatoCaricamento.completato, caricato_da_id=utente.id,
+            started_at=datetime.utcnow(), completed_at=datetime.utcnow(),
+        ))
 
     if file_excel is not None and file_excel.filename:
         _, ext_excel = os.path.splitext(file_excel.filename)

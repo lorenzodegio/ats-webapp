@@ -14,6 +14,16 @@
   const dropzonePdf = document.getElementById("dropzone-pdf");
   const nomeFilePdfEl = document.getElementById("nome-file-pdf");
 
+  const inputCartella = document.getElementById("input-cartella-pdf");
+  const dropzoneCartella = document.getElementById("dropzone-cartella");
+  const nomeCartellaEl = document.getElementById("nome-cartella-pdf");
+
+  const btnModoCombinato = document.getElementById("btn-modo-combinato");
+  const btnModoCartella = document.getElementById("btn-modo-cartella");
+  const bloccoModoCombinato = document.getElementById("blocco-modo-combinato");
+  const bloccoModoCartella = document.getElementById("blocco-modo-cartella");
+  let modoCaricamento = "combinato"; // oppure "cartella"
+
   const inputExcel = document.getElementById("input-file-excel");
   const dropzoneExcel = document.getElementById("dropzone-excel");
   const nomeFileExcelEl = document.getElementById("nome-file-excel");
@@ -58,13 +68,20 @@
       }
     }
     if (stepCorrente === 2) {
-      if (!inputPdf.files || inputPdf.files.length === 0) {
-        alert("Carica il PDF combinato delle prescrizioni prima di continuare.");
-        return false;
-      }
-      if (!inputPdf.files[0].name.toLowerCase().endsWith(".pdf")) {
-        alert("Il file prescrizioni deve essere in formato PDF.");
-        return false;
+      if (modoCaricamento === "combinato") {
+        if (!inputPdf.files || inputPdf.files.length === 0) {
+          alert("Carica il PDF combinato delle prescrizioni prima di continuare.");
+          return false;
+        }
+        if (!inputPdf.files[0].name.toLowerCase().endsWith(".pdf")) {
+          alert("Il file prescrizioni deve essere in formato PDF.");
+          return false;
+        }
+      } else {
+        if (pdfTrovatiInCartella().length === 0) {
+          alert("Scegli una cartella che contenga almeno un file PDF.");
+          return false;
+        }
       }
       if (!inputExcel.files || inputExcel.files.length === 0) {
         alert("Carica l'Excel Regione prima di continuare: senza, l'analisi delle difformità non è affidabile.");
@@ -79,12 +96,45 @@
     return true;
   }
 
+  function pdfTrovatiInCartella() {
+    if (!inputCartella.files) return [];
+    return Array.from(inputCartella.files).filter((f) => f.name.toLowerCase().endsWith(".pdf"));
+  }
+
+  function impostaModoCaricamento(modo) {
+    modoCaricamento = modo;
+    const combinato = modo === "combinato";
+    bloccoModoCombinato.style.display = combinato ? "" : "none";
+    bloccoModoCartella.style.display = combinato ? "none" : "";
+    btnModoCombinato.classList.toggle("btn--primario", combinato);
+    btnModoCombinato.classList.toggle("btn--secondario", !combinato);
+    btnModoCartella.classList.toggle("btn--primario", !combinato);
+    btnModoCartella.classList.toggle("btn--secondario", combinato);
+    // Svuota la modalita' non attiva: non deve restare selezionato un file
+    // "nascosto" che finirebbe comunque nel form al momento dell'invio.
+    if (combinato) {
+      inputCartella.value = "";
+      nomeCartellaEl.textContent = "";
+      dropzoneCartella.classList.remove("dropzone--attivo");
+    } else {
+      inputPdf.value = "";
+      nomeFilePdfEl.textContent = "";
+      dropzonePdf.classList.remove("dropzone--attivo");
+    }
+  }
+
   function aggiornaRiepilogo() {
     document.getElementById("riepilogo-nome").textContent = inputNome.value.trim() || "—";
     document.getElementById("riepilogo-periodo").textContent =
       `${NOMI_MESI[Number(inputMese.value)]} ${inputAnno.value}`;
-    document.getElementById("riepilogo-pdf").textContent =
-      inputPdf.files[0] ? inputPdf.files[0].name : "—";
+    if (modoCaricamento === "combinato") {
+      document.getElementById("riepilogo-pdf").textContent =
+        inputPdf.files[0] ? inputPdf.files[0].name : "—";
+    } else {
+      const trovati = pdfTrovatiInCartella();
+      document.getElementById("riepilogo-pdf").textContent =
+        trovati.length ? `${trovati.length} file PDF (cartella)` : "—";
+    }
     document.getElementById("riepilogo-excel").textContent =
       inputExcel.files[0] ? inputExcel.files[0].name : "Non caricato";
   }
@@ -116,6 +166,23 @@
 
   collegaDropzone(inputPdf, dropzonePdf, nomeFilePdfEl);
   collegaDropzone(inputExcel, dropzoneExcel, nomeFileExcelEl);
+
+  // Niente trascinamento per la cartella (richiede l'API DataTransferItem
+  // per leggere le sottocartelle, non vale la complessita' in piu'): solo
+  // click, che apre il selettore di cartelle nativo del sistema operativo.
+  inputCartella.addEventListener("change", () => {
+    const trovati = pdfTrovatiInCartella();
+    if (trovati.length > 0) {
+      nomeCartellaEl.textContent = `${trovati.length} file PDF trovati`;
+      dropzoneCartella.classList.add("dropzone--attivo");
+    } else {
+      nomeCartellaEl.textContent = "Nessun PDF trovato in questa cartella";
+      dropzoneCartella.classList.remove("dropzone--attivo");
+    }
+  });
+
+  btnModoCombinato.addEventListener("click", () => impostaModoCaricamento("combinato"));
+  btnModoCartella.addEventListener("click", () => impostaModoCaricamento("cartella"));
 
   btnAvanti.addEventListener("click", () => {
     if (!validaStepCorrente()) return;

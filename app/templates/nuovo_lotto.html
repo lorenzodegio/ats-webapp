@@ -66,13 +66,29 @@
     <!-- Step 2: Caricamento -->
     <div class="wizard-panel" data-step="2">
       <div class="campo">
-        <label>PDF combinato prescrizioni (obbligatorio)</label>
-        <label class="dropzone" id="dropzone-pdf" for="input-file-pdf">
-          <div>Trascina qui il PDF, oppure clicca per selezionarlo</div>
-          <div style="font-size:12px; margin-top:6px;">Formato accettato: .pdf</div>
-          <div class="dropzone__nome-file" id="nome-file-pdf"></div>
-        </label>
-        <input type="file" id="input-file-pdf" name="file_pdf" accept="application/pdf" style="display:none" required>
+        <label>Prescrizioni (obbligatorio)</label>
+        <div style="display:flex; gap:8px; margin-bottom:12px;">
+          <button type="button" class="btn btn--primario" id="btn-modo-combinato">PDF combinato</button>
+          <button type="button" class="btn btn--secondario" id="btn-modo-cartella">Cartella di PDF separati</button>
+        </div>
+
+        <div id="blocco-modo-combinato">
+          <label class="dropzone" id="dropzone-pdf" for="input-file-pdf">
+            <div>Trascina qui il PDF, oppure clicca per selezionarlo</div>
+            <div style="font-size:12px; margin-top:6px;">Formato accettato: .pdf — un unico file multi-pagina</div>
+            <div class="dropzone__nome-file" id="nome-file-pdf"></div>
+          </label>
+          <input type="file" id="input-file-pdf" name="file_pdf" accept="application/pdf" style="display:none">
+        </div>
+
+        <div id="blocco-modo-cartella" style="display:none;">
+          <label class="dropzone" id="dropzone-cartella" for="input-cartella-pdf">
+            <div>Clicca per scegliere una cartella</div>
+            <div style="font-size:12px; margin-top:6px;">Tutti i PDF al suo interno verranno caricati, uno per ricetta</div>
+            <div class="dropzone__nome-file" id="nome-cartella-pdf"></div>
+          </label>
+          <input type="file" id="input-cartella-pdf" name="files_cartella" webkitdirectory multiple style="display:none">
+        </div>
       </div>
 
       <div class="campo">
