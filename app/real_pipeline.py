@@ -29,12 +29,14 @@ consegna per l'elenco preciso dei punti da verificare.
 """
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
 from datetime import datetime, date
 from pathlib import Path
 
+import openpyxl
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
@@ -45,11 +47,12 @@ from app.storage import (
     RICETTE_RAW,
     RICETTE_STAGING_IMAGES,
     RICETTE_STAGING_PDFS,
-    SHAREPOINT_FINTO,
     cartella_pagine_lotto,
+    nome_file_sicuro,
     pdf_originale_lotto,
     pubblica_file,
     pubblica_output_preprocessing,
+    radice_sharepoint,
     relativo_a_radice,
     rinomina_pagina_media,
 )
@@ -63,7 +66,6 @@ log = logging.getLogger("RealPipeline")
 
 EXCEL_REGIONE_DIR = DATI_DIR / "excel_regione"
 OUTPUT_DIR = DATI_DIR / "output"
-FAKE_SP_ROOT = SHAREPOINT_FINTO
 
 FILE_JSON_DA_ESCLUDERE = {"riepilogo.json"}
 
@@ -116,15 +118,56 @@ class ElaborazioneAnnullata(Exception):
     """Sollevata quando l'operatore annulla un'elaborazione reale in corso."""
 
 
+def pulisci_dati_parziali_fase(db: Session, lotto: LottoMensile, fase: FaseElaborazione) -> None:
+    """
+    Ripulisce i dati scritti a meta' da un tentativo di questa fase
+    interrotto (fallito o annullato): una fase puo' fermarsi a meta' ciclo,
+    con alcune prescrizioni gia' elaborate e altre no. Senza questa
+    pulizia, sia "Riprova" sia una nuova elaborazione dopo "Annulla"
+    rischierebbero di lavorare su dati incoerenti o creare doppioni.
+
+    Condivisa tra _gestisci_annullamento qui sotto (annulla e basta,
+    lascia il lotto in eccezione) e /lotti/{id}/riprova in lotti.py
+    (pulisce e rilancia subito la stessa fase) — stessa pulizia, due
+    momenti diversi in cui serve.
+    """
+    if fase == FaseElaborazione.preprocessing:
+        for p in list(lotto.prescrizioni):
+            db.delete(p)
+        lotto.n_prescrizioni_totali = 0
+        lotto.n_barcode_letti = 0
+        lotto.n_barcode_undefined = 0
+    elif fase == FaseElaborazione.vllm:
+        for p in lotto.prescrizioni:
+            if p.dati_ocr:
+                db.delete(p.dati_ocr)
+            p.score_ocr = None
+            p.n_campi_compilati = None
+            p.barcode_in_excel = None
+            p.riga_excel = None
+            p.sp_json_path = None
+        lotto.score_ocr_medio = None
+        lotto.n_match_excel = 0
+    elif fase == FaseElaborazione.difformita:
+        for p in lotto.prescrizioni:
+            for d in list(p.difformita):
+                db.delete(d)
+        lotto.n_difformita_totali = 0
+    elif fase == FaseElaborazione.completa:
+        lotto.excel_output_filename = None
+
+
 def _gestisci_annullamento(db: Session, lotto_id, elaborazione: Elaborazione) -> None:
-    """Marca elaborazione e lotto come annullati dall'operatore (non un errore vero)."""
-    messaggio = "Elaborazione annullata dall'operatore"
-    _log(db, elaborazione, messaggio, LivelloLog.warning)
+    """Marca elaborazione e lotto come annullati dall'operatore (non un errore vero),
+    e ripulisce i dati parziali scritti dalla fase interrotta (vedi pulisci_dati_parziali_fase)."""
+    messaggio = "Esecuzione annullata dall'operatore"
+    log_elaborazione(db, elaborazione, messaggio)
     elaborazione.stato = StatoElaborazione.annullata
     elaborazione.richiesta_controllo = None
     elaborazione.finished_at = datetime.utcnow()
     lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
     if lotto:
+        pulisci_dati_parziali_fase(db, lotto, elaborazione.fase)
         lotto.stato = StatoLotto.eccezione
         lotto.note = ((lotto.note or "") + f"\n[{datetime.utcnow():%d/%m %H:%M}] {messaggio}").strip()
         lotto.updated_at = datetime.utcnow()
@@ -166,9 +209,18 @@ def annulla_container(nome_container: str) -> bool:
         return False
 
 
+STATI_DOCKER_ATTIVI = (StatoLotto.preprocessing, StatoLotto.elaborazione_ocr, StatoLotto.analisi_difformita)
+
+
+def lotto_in_esecuzione(db: Session):
+    """Il lotto (se presente) con un container Docker attualmente in esecuzione — solo
+    uno alla volta puo' averlo (tutti condividono la cartella ./dati, vedi cima del modulo).
+    Usato sia per bloccare l'avvio di un nuovo lotto sia per dire QUALE lotto e' occupato."""
+    return db.query(LottoMensile).filter(LottoMensile.stato.in_(STATI_DOCKER_ATTIVI)).first()
+
+
 def esiste_lotto_in_esecuzione(db: Session) -> bool:
-    stati_docker_attivi = (StatoLotto.preprocessing, StatoLotto.elaborazione_ocr, StatoLotto.analisi_difformita)
-    return db.query(LottoMensile).filter(LottoMensile.stato.in_(stati_docker_attivi)).first() is not None
+    return lotto_in_esecuzione(db) is not None
 
 
 def _pulisci_cartella_dati():
@@ -189,7 +241,7 @@ def _scrivi_farmacie_per_pipeline(db: Session) -> None:
         log.warning(f"Impossibile scrivere farmacie.json per la pipeline: {exc}")
 
 
-def _log(db: Session, elaborazione: Elaborazione, messaggio: str, livello: LivelloLog = LivelloLog.info) -> None:
+def log_elaborazione(db: Session, elaborazione: Elaborazione, messaggio: str, livello: LivelloLog = LivelloLog.info) -> None:
     db.add(LogElaborazione(elaborazione_id=elaborazione.id, messaggio=messaggio, livello=livello))
     db.commit()
     getattr(log, livello.value if livello != LivelloLog.warning else "warning")(messaggio)
@@ -263,7 +315,7 @@ def _esegui_container(nome_servizio: str, db: Session, elaborazione: Elaborazion
             livello = LivelloLog.error
         elif "[WARNING]" in riga or "ATTENZIONE" in riga.upper():
             livello = LivelloLog.warning
-        _log(db, elaborazione, riga, livello)
+        log_elaborazione(db, elaborazione, riga, livello)
 
     codice_uscita = processo.wait()
     if codice_uscita != 0:
@@ -326,16 +378,36 @@ def _copia_lotto_verso_dati(lotto: LottoMensile) -> None:
     if originale is not None:
         shutil.copy2(originale, RICETTE_RAW / originale.name)
     elif lotto.sp_prescrizioni_path:
-        cartella_prescrizioni = FAKE_SP_ROOT / lotto.sp_prescrizioni_path
+        cartella_prescrizioni = radice_sharepoint() / lotto.sp_prescrizioni_path
         if cartella_prescrizioni.exists():
             for pdf in cartella_prescrizioni.glob("*.pdf"):
                 shutil.copy2(pdf, RICETTE_RAW / pdf.name)
 
     if lotto.excel_input_filename and lotto.sp_lavoro_path:
-        cartella_lavoro = FAKE_SP_ROOT / lotto.sp_lavoro_path
+        cartella_lavoro = radice_sharepoint() / lotto.sp_lavoro_path
         excel_path = cartella_lavoro / lotto.excel_input_filename
         if excel_path.exists():
             shutil.copy2(excel_path, EXCEL_REGIONE_DIR / excel_path.name)
+
+
+def _pubblica_prescrizioni_su_sharepoint(lotto: LottoMensile) -> int:
+    """
+    Copia le ricette gia' estratte dal preprocessing (una per barcode,
+    RICETTE = /dati/ricette dentro il container) nella cartella
+    PRESCRIZIONI dello storage permanente del lotto — NON il PDF combinato
+    caricato in origine (quello serve solo come input alla pipeline).
+    Un operatore/farmacia che apre PRESCRIZIONI deve trovare le singole
+    ricette, non un unico PDF multi-pagina da scorrere a mano.
+    """
+    if not lotto.sp_prescrizioni_path:
+        return 0
+    cartella = radice_sharepoint() / lotto.sp_prescrizioni_path
+    cartella.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for pdf in RICETTE.glob("*.pdf"):
+        shutil.copy2(pdf, cartella / pdf.name)
+        n += 1
+    return n
 
 
 def avvia_preprocessing_reale(lotto_id) -> None:
@@ -357,14 +429,16 @@ def avvia_preprocessing_reale(lotto_id) -> None:
         lotto.stato = StatoLotto.preprocessing
         db.commit()
 
-        _log(db, elaborazione, f"Copio i file del lotto '{lotto.nome}' in ./dati")
+        log_elaborazione(db, elaborazione, f"Copio i file del lotto '{lotto.nome}' in ./dati")
         _copia_lotto_verso_dati(lotto)
         _scrivi_farmacie_per_pipeline(db)
 
-        _log(db, elaborazione, "Avvio container fase1-preprocessing")
+        log_elaborazione(db, elaborazione, "Avvio container fase1-preprocessing")
         _esegui_container("fase1-preprocessing", db, elaborazione)
         pubblica_output_preprocessing(lotto.id)
-        _log(db, elaborazione, "Pagine copiate in media/ per l'interfaccia (indipendente da Docker)")
+        log_elaborazione(db, elaborazione, "Pagine copiate in media/ per l'interfaccia (indipendente da Docker)")
+        n_su_sharepoint = _pubblica_prescrizioni_su_sharepoint(lotto)
+        log_elaborazione(db, elaborazione, f"{n_su_sharepoint} ricette copiate in PRESCRIZIONI su SharePoint")
 
         # Nessun manifest JSON scritto dal container: ricostruisco
         # l'elenco dalle cartelle di output, come fa run_fase.py stesso.
@@ -402,7 +476,7 @@ def avvia_preprocessing_reale(lotto_id) -> None:
         elaborazione.n_processati = n_letti + n_undefined
 
         lotto.stato = StatoLotto.revisione_barcode
-        _log(db, elaborazione, f"Preprocessing completato: {n_letti} barcode letti, {n_undefined} da rivedere")
+        log_elaborazione(db, elaborazione, f"Preprocessing completato: {n_letti} barcode letti, {n_undefined} da rivedere")
         db.commit()
 
     except ElaborazioneAnnullata:
@@ -475,7 +549,7 @@ def avvia_ocr_reale(lotto_id) -> None:
         db.commit()
 
         _scrivi_farmacie_per_pipeline(db)
-        _log(db, elaborazione, "Avvio container fase2-ocr (estrazione VLLM + arricchimento Regione)")
+        log_elaborazione(db, elaborazione, "Avvio container fase2-ocr (estrazione VLLM + arricchimento Regione)")
         _esegui_container("fase2-ocr", db, elaborazione)
 
         n_processati, n_match = 0, 0
@@ -489,7 +563,7 @@ def avvia_ocr_reale(lotto_id) -> None:
                 Prescrizione.lotto_id == lotto.id, Prescrizione.barcode == barcode
             ).first()
             if presc is None:
-                _log(db, elaborazione, f"Nessuna prescrizione trovata per barcode {barcode}, salto", LivelloLog.warning)
+                log_elaborazione(db, elaborazione, f"Nessuna prescrizione trovata per barcode {barcode}, salto", LivelloLog.warning)
                 continue
 
             campi_normalizzati = _normalizza_dati_ocr(dati_grezzi)
@@ -522,7 +596,7 @@ def avvia_ocr_reale(lotto_id) -> None:
         elaborazione.n_processati = n_processati
 
         lotto.stato = StatoLotto.revisione_qualita
-        _log(db, elaborazione, f"OCR completato: {n_processati} prescrizioni elaborate, {n_match} con match Regione")
+        log_elaborazione(db, elaborazione, f"OCR completato: {n_processati} prescrizioni elaborate, {n_match} con match Regione")
         db.commit()
 
     except ElaborazioneAnnullata:
@@ -556,7 +630,7 @@ def avvia_difformita_reale(lotto_id) -> None:
         db.commit()
 
         _scrivi_farmacie_per_pipeline(db)
-        _log(db, elaborazione, "Avvio container fase3-difformita")
+        log_elaborazione(db, elaborazione, "Avvio container fase3-difformita")
         _esegui_container("fase3-difformita", db, elaborazione)
 
         n_con_difformita, n_difformita_totali = 0, 0
@@ -599,7 +673,7 @@ def avvia_difformita_reale(lotto_id) -> None:
         elaborazione.n_processati = n_con_difformita
 
         lotto.stato = StatoLotto.revisione_difformita
-        _log(db, elaborazione, f"Analisi completata: {n_difformita_totali} difformita su {n_con_difformita} prescrizioni")
+        log_elaborazione(db, elaborazione, f"Analisi completata: {n_difformita_totali} difformita su {n_con_difformita} prescrizioni")
         db.commit()
 
     except ElaborazioneAnnullata:
@@ -613,6 +687,55 @@ def avvia_difformita_reale(lotto_id) -> None:
             db.commit()
     finally:
         db.close()
+
+
+def _correggi_link_pdf_excel(destinazione: Path, lotto: LottoMensile) -> None:
+    """
+    phase4_excel.py (dentro Docker) scrive nella colonna LINK un
+    hyperlink assoluto al PDF dentro il container (/dati/ricette/...):
+    un percorso che non esiste piu' fuori da li' (./dati viene svuotato
+    prima del lotto successivo) e che comunque non sarebbe portabile tra
+    le macchine dei diversi operatori — ognuno ha il proprio OneDrive
+    sincronizzato sotto un percorso utente diverso (C:\\Users\\mario\\...
+    vs C:\\Users\\luigi\\...). Qui riscriviamo i link con percorsi
+    RELATIVI alla cartella PRESCRIZIONI (sorella di OUTPUT sotto lo
+    stesso lotto): OneDrive sincronizza la stessa struttura relativa per
+    chiunque abbia accesso al sito, quindi un link relativo funziona per
+    tutti indipendentemente dal proprio percorso assoluto locale.
+    """
+    if not lotto.sp_prescrizioni_path:
+        return
+    try:
+        wb = openpyxl.load_workbook(destinazione)
+        ws = wb.active
+        intestazione = {}
+        for col_idx in range(1, ws.max_column + 1):
+            nome = ws.cell(row=1, column=col_idx).value
+            if nome:
+                intestazione[str(nome).strip().upper()] = col_idx
+        col_link = intestazione.get("LINK")
+        col_barcode = intestazione.get("BARCODE")
+        if not col_link or not col_barcode:
+            return
+
+        cartella_prescrizioni = radice_sharepoint() / lotto.sp_prescrizioni_path
+        relativo = os.path.relpath(cartella_prescrizioni, destinazione.parent).replace("\\", "/")
+
+        corretti = 0
+        for riga in range(2, ws.max_row + 1):
+            barcode = ws.cell(row=riga, column=col_barcode).value
+            if not barcode:
+                continue
+            nome_file = f"{barcode}.pdf"
+            cella = ws.cell(row=riga, column=col_link)
+            cella.value = nome_file
+            cella.hyperlink = f"{relativo}/{nome_file}"
+            cella.style = "Hyperlink"
+            corretti += 1
+        wb.save(destinazione)
+        log.info(f"Corretti {corretti} link PDF nell'Excel finale ({relativo}/)")
+    except Exception:
+        log.exception("Impossibile correggere i link PDF nell'Excel finale (il file resta comunque salvato)")
 
 
 def scrivi_excel_finale_reale(lotto_id) -> bool:
@@ -638,26 +761,34 @@ def scrivi_excel_finale_reale(lotto_id) -> bool:
         db.add(elaborazione)
         db.commit()
 
-        _log(db, elaborazione, "Avvio container fase4-excel")
+        log_elaborazione(db, elaborazione, "Avvio container fase4-excel")
         _esegui_container("fase4-excel", db, elaborazione)
 
         file_excel_finale = next(OUTPUT_DIR.glob("*.xlsx"), None)
         if file_excel_finale is None:
             raise RuntimeError("Il container fase4-excel non ha prodotto nessun file .xlsx in /dati/output")
 
-        cartella_output_permanente = FAKE_SP_ROOT / lotto.sp_output_path
+        # sp_output_path e' ora una sottocartella del lotto stesso (non piu'
+        # una cartella LAVORO/OUTPUT condivisa da tutti i lotti): senza
+        # questo, ogni nuovo lotto sovrascriveva l'Excel del precedente,
+        # perche' phase4_excel.py salva sempre con lo stesso nome di
+        # template. Il nome file qui e' invece specifico del lotto.
+        cartella_output_permanente = radice_sharepoint() / lotto.sp_output_path
         cartella_output_permanente.mkdir(parents=True, exist_ok=True)
-        destinazione = cartella_output_permanente / file_excel_finale.name
+        nome_file_output = f"{nome_file_sicuro(lotto.nome)}.xlsx"
+        destinazione = cartella_output_permanente / nome_file_output
         shutil.copy2(file_excel_finale, destinazione)
+        _correggi_link_pdf_excel(destinazione, lotto)
         pubblica_file(lotto.id, destinazione)
 
-        lotto.excel_output_filename = file_excel_finale.name
+        lotto.excel_output_filename = nome_file_output
+
         elaborazione.stato = StatoElaborazione.completata
         elaborazione.finished_at = datetime.utcnow()
         elaborazione.exit_code = 0
         db.commit()
 
-        _log(db, elaborazione, f"Excel finale scritto: {destinazione}")
+        log_elaborazione(db, elaborazione, f"Excel finale scritto: {destinazione}")
         return True
 
     except ElaborazioneAnnullata:

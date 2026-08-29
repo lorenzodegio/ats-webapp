@@ -9,7 +9,7 @@
     <div class="sottotitolo mono">
       {{ "%02d"|format(lotto.mese) }}/{{ lotto.anno }} &middot;
       operatore {{ lotto.operatore.nome_completo if lotto.operatore else '—' }} &middot;
-      creato il {{ lotto.created_at.strftime("%d/%m/%Y %H:%M") }}
+      creato il {{ lotto.created_at|ora_locale }}
     </div>
   </div>
   <div>{% include "_badge_stato.html" %}</div>
@@ -23,10 +23,15 @@
 <div class="errore-form errore-form--lotto">
   <div class="errore-form__titolo">⚠ Elaborazione interrotta</div>
   <div class="errore-form__corpo">{{ lotto.note or "Si è verificato un problema durante l'elaborazione, ma non è stato salvato alcun dettaglio." }}</div>
-  <div class="errore-form__meta">Rilevato il {{ lotto.updated_at.strftime("%d/%m/%Y alle %H:%M") if lotto.updated_at else '—' }}</div>
-  <form method="post" action="/lotti/{{ lotto.id }}/riprova" style="margin-top:14px;">
-    <button type="submit" class="btn btn--primario">Riprova</button>
-  </form>
+  <div class="errore-form__meta">Rilevato il {{ lotto.updated_at|ora_locale("%d/%m/%Y alle %H:%M") or '—' }}</div>
+  <div style="display:flex; gap:10px; margin-top:14px;">
+    <form method="post" action="/lotti/{{ lotto.id }}/riprova">
+      <button type="submit" class="btn btn--primario">Riprova</button>
+    </form>
+    <form method="post" action="/lotti/{{ lotto.id }}/elimina" onsubmit="return confirm('Eliminare definitivamente questo lotto? Tutti i dati caricati/elaborati fino ad ora andranno persi, non e\' recuperabile.');">
+      <button type="submit" class="btn btn--pericolo">Elimina</button>
+    </form>
+  </div>
 </div>
 {% endif %}
 
@@ -56,9 +61,6 @@
     </div>
     <span class="barra-progresso__percentuale" id="percentuale-dettaglio">{{ percentuale }}%</span>
   </div>
-  <div class="progresso-item" id="progresso-item-dettaglio">
-    {% if progresso_item %}{{ progresso_item.attuale }} di {{ progresso_item.totale }} prescrizioni{% endif %}
-  </div>
   <div class="stato-macchina{% if in_pausa %} stato-macchina--pausa{% endif %}" id="stato-macchina">
     <div class="stato-macchina__pulse" aria-hidden="true">
       <span></span><span></span><span></span>
@@ -69,6 +71,34 @@
     <p class="stato-macchina__messaggio" id="stato-macchina-messaggio">{{ messaggio_operatore }}</p>
   </div>
 </div>
+{% endif %}
+
+{% if log_righe %}
+<details class="card gruppo-lotto" id="pannello-log-dettaglio" data-lotto-id="{{ lotto.id }}"{% if elaborazione_attiva or lotto.stato.value == "eccezione" %} open{% endif %}>
+  <summary class="gruppo-lotto__intestazione">
+    <span class="gruppo-lotto__nome">
+      <span class="gruppo-lotto__freccia" aria-hidden="true">›</span>
+      Log tecnico
+    </span>
+    <span class="card__titolo-contatore">ultime {{ log_righe|length }} righe</span>
+  </summary>
+  <div class="gruppo-lotto__corpo">
+    <div style="max-height:320px; overflow-y:auto;" id="contenitore-log-dettaglio">
+      <table class="tabella mono" style="font-size:12px;">
+        <thead><tr><th style="width:90px;">Ora</th><th style="width:90px;">Livello</th><th>Messaggio</th></tr></thead>
+        <tbody id="tabella-log-dettaglio-corpo">
+          {% for riga in log_righe %}
+          <tr>
+            <td>{{ riga.ora }}</td>
+            <td><span class="badge {{ badge_livello_log[riga.livello] }}">{{ riga.livello }}</span></td>
+            <td>{{ riga.messaggio }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</details>
 {% endif %}
 
 <div class="kpi-grid">
@@ -264,7 +294,7 @@
 {% elif lotto.stato.value == "archiviato" %}
 <div class="card">
   <h2 class="card__titolo">Lotto archiviato</h2>
-  <p style="font-size:14px;">Archiviato il {{ lotto.archiviato_at.strftime("%d/%m/%Y %H:%M") if lotto.archiviato_at else '—' }}.</p>
+  <p style="font-size:14px;">Archiviato il {{ lotto.archiviato_at|ora_locale or '—' }}.</p>
   <p class="mono" style="font-size:12px; color: var(--text-secondary);">{{ lotto.sp_archivio_path }}</p>
   {% if lotto.excel_output_filename %}
   <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">

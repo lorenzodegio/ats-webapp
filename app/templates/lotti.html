@@ -31,7 +31,7 @@
         <td>{% include "_badge_stato.html" %}</td>
         <td>{{ lotto.n_prescrizioni_totali or 0 }}</td>
         <td>{{ lotto.n_difformita_totali or 0 }}</td>
-        <td>{{ lotto.updated_at.strftime("%d/%m/%Y %H:%M") }}</td>
+        <td>{{ lotto.updated_at|ora_locale }}</td>
       </tr>
       {% endfor %}
     </tbody>

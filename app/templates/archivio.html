@@ -59,7 +59,7 @@
             <td class="mono" style="font-size:12px;">{{ p.stato_barcode.value.replace('_', ' ') }}</td>
             <td>{{ p.score_ocr or '—' }}</td>
             <td>{{ p.difformita | length }}</td>
-            <td>{{ p.created_at.strftime("%d/%m/%Y %H:%M") }}</td>
+            <td>{{ p.created_at|ora_locale }}</td>
           </tr>
           {% endfor %}
         </tbody>

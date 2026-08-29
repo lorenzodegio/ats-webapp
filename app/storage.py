@@ -6,6 +6,7 @@ Docker (se usato) scrive ancora in ./dati per la pipeline OCR; dopo ogni
 fase copiamo PDF/PNG in media/lotti/<id>/pagine/ e il client li prende
 solo da lì (route autenticata, non cartella pubblica).
 """
+import re
 import shutil
 from pathlib import Path
 
@@ -16,12 +17,52 @@ if (Path("/workspace") / "app" / "main.py").is_file():
 MEDIA_ROOT = RADICE_PROGETTO / "media"
 DATI_DIR = RADICE_PROGETTO / "dati"
 SHAREPOINT_FINTO = RADICE_PROGETTO / "sharepoint_finto"
-PERCORSO_CARTELLA_OUTPUT_RECENTI = "ARCHIVIO/ELABORAZIONI RECENTI"
 
 RICETTE_RAW = DATI_DIR / "ricette_raw"
 RICETTE_STAGING_IMAGES = DATI_DIR / "ricette_staging" / "images"
 RICETTE_STAGING_PDFS = DATI_DIR / "ricette_staging" / "pdfs"
 RICETTE = DATI_DIR / "ricette"
+
+_CACHE_RADICE_SHAREPOINT = {}
+
+
+def radice_sharepoint() -> Path:
+    """
+    Radice dello storage "SharePoint": in produzione la cartella OneDrive
+    for Business sincronizzata sulla macchina ATS (Configurazione.sharepoint_base_path),
+    altrimenti SHAREPOINT_FINTO (sviluppo, macchine senza OneDrive).
+
+    Letta una sola volta e messa in cache di processo: oggi non esiste
+    ancora un modo per cambiare sharepoint_base_path mentre il server e'
+    in esecuzione (tab "Sistema" di Impostazioni e' sola lettura), quindi
+    non c'e' bisogno di rileggerla ad ogni chiamata — solo di non fallire
+    se la tabella Configurazione non e' ancora popolata (DB appena creato,
+    prima di seed_admin.py).
+    """
+    if "percorso" not in _CACHE_RADICE_SHAREPOINT:
+        percorso = None
+        try:
+            from app.database import SessionLocal
+            from app.models import Configurazione
+            db = SessionLocal()
+            try:
+                riga = db.query(Configurazione).filter(Configurazione.chiave == "sharepoint_base_path").first()
+                if riga and riga.valore and riga.valore.strip():
+                    candidato = Path(riga.valore.strip())
+                    if candidato.is_dir():
+                        percorso = candidato
+            finally:
+                db.close()
+        except Exception:
+            percorso = None
+        _CACHE_RADICE_SHAREPOINT["percorso"] = percorso or SHAREPOINT_FINTO
+    return _CACHE_RADICE_SHAREPOINT["percorso"]
+
+
+def nome_file_sicuro(testo: str, default: str = "output") -> str:
+    """Nome di file/cartella sicuro da un testo libero (es. lotto.nome)."""
+    pulito = re.sub(r"[^a-zA-Z0-9_\-\s]", "", testo or "").strip().replace(" ", "_")
+    return pulito or default
 
 
 def cartella_originale_lotto(lotto_id) -> Path:
@@ -57,7 +98,7 @@ def pdf_originale_lotto(lotto) -> Path:
         if trovati:
             return trovati[0]
     if lotto.sp_prescrizioni_path:
-        sp = SHAREPOINT_FINTO / lotto.sp_prescrizioni_path
+        sp = radice_sharepoint() / lotto.sp_prescrizioni_path
         if sp.is_dir():
             trovati = sorted(sp.glob("*.pdf"))
             if trovati:
@@ -100,6 +141,7 @@ def _radici_consentite():
         MEDIA_ROOT.resolve(),
         DATI_DIR.resolve(),
         SHAREPOINT_FINTO.resolve(),
+        radice_sharepoint().resolve(),
     )
 
 
@@ -125,6 +167,7 @@ def _candidato_esistente(rel_or_abs: str):
     else:
         tentativi.append(RADICE_PROGETTO / grezzo)
         tentativi.append(Path.cwd() / grezzo)
+        tentativi.append(radice_sharepoint() / grezzo)
         tentativi.append(SHAREPOINT_FINTO / grezzo)
     visti = set()
     for candidato in tentativi:

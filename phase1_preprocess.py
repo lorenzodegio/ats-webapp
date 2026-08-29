@@ -95,7 +95,7 @@ def run(input_dir: Path, images_dir: Path) -> list[dict]:
         logger.warning(f"Nessun PDF in {input_dir}")
         return []
 
-    logger.info(f"[Fase 1] {len(pdf_files)} PDF da elaborare")
+    logger.info(f"[1/4] {len(pdf_files)} PDF da elaborare")
 
     risultati  = []
     sospetti   = []  # pagine anomale da segnalare
@@ -186,14 +186,14 @@ def run(input_dir: Path, images_dir: Path) -> list[dict]:
     sosp_bc_r  = sum(1 for s in sospetti if s["tipo"] == "barcode_su_retro_classificato")
     sosp_f_nbc = sum(1 for s in sospetti if s["tipo"] == "fronte_senza_barcode")
 
-    logger.info(f"[Fase 1] Completato: {len(risultati)} fronti totali")
+    logger.info(f"[1/4] Completato: {len(risultati)} fronti totali")
     logger.info(f"  ✓ Con barcode:              {bc_ok}")
     logger.info(f"  ⚠ Senza barcode (undefined): {bc_undef}")
     logger.info(f"  ⚠ Barcode su retro classif.: {sosp_bc_r}")
     logger.info(f"  ⚠ Fronte senza barcode:      {sosp_f_nbc}")
 
     if sospetti:
-        logger.warning(f"[Fase 1] {len(sospetti)} pagine sospette:")
+        logger.warning(f"[1/4] {len(sospetti)} pagine sospette:")
         for s in sospetti:
             logger.warning(f"    [{s['tipo']}] {s['pdf']} pag {s['pagina']} bc={s['barcode']}")
 

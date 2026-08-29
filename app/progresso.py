@@ -4,11 +4,96 @@ attraverso il suo ciclo di vita (Sezione "Flusso caricamento -> elaborazione
 -> archiviazione" dello schema). Usato da dashboard e dettaglio lotto.
 """
 import re
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from app.models import FaseElaborazione, StatoLotto
 
 _PATTERN_PROGRESSO = re.compile(r"\[(\d+)/(\d+)\]")
+
+FUSO_ROMA = ZoneInfo("Europe/Rome")
+
+
+def formatta_ora_locale(dt, formato: str = "%d/%m/%Y %H:%M"):
+    """
+    Converte un datetime naive (tutti i timestamp del modello sono salvati
+    in UTC via datetime.utcnow() come default di colonna) in orario locale
+    Europe/Rome per la UI. Filtro Jinja "ora_locale" registrato sui
+    Jinja2Templates che ne hanno bisogno (vedi lotti.py, archivio.py).
+    """
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc).astimezone(FUSO_ROMA).strftime(formato)
+
+# Il logger della pipeline (logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s"))
+# scrive gia' data/livello dentro il testo del messaggio: le togliamo qui perche'
+# nel pannello "Log tecnico" Ora/Livello sono gia' colonne separate.
+_PATTERN_PREFISSO_LOG = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} \[\w+\]\s*")
+
+# Whitelist di righe rilevanti per un operatore non tecnico (il log completo
+# di Docker puo' avere migliaia di righe): cambio fase, ricetta in
+# lavorazione, fine fase. Gli errori passano a prescindere (vedi
+# _riga_log_rilevante), i warning restano sempre esclusi.
+_PATTERN_FASE = re.compile(r"^(\[\d+/4\]|\[Fase \d+\])")
+
+_PATTERN_LOG_RILEVANTI = [
+    _PATTERN_FASE,                                # avvio/fine fase: 1=preprocessing 2=ocr 3=difformita 4=excel
+    re.compile(r"^\[\d+/\d+\]\s+\S+\.pdf\s*$"),   # ricetta i/N in elaborazione
+    re.compile(r"^Elaborando:\s"),                # ricetta in elaborazione (per file)
+    re.compile(r"pipeline completata", re.IGNORECASE),
+    # Azioni dell'operatore sull'elaborazione (pausa/riprendi/annulla/riprova
+    # in lotti.py): non vengono dal log grezzo di Docker, le scrive la
+    # webapp stessa con log_elaborazione(), ma vanno mostrate comunque nel
+    # pannello — l'operatore deve vedere quando ha agito, non solo cosa
+    # ha fatto la pipeline.
+    re.compile(r"^Esecuzione (messa in pausa|ripresa|annullata|riavviata)\b"),
+]
+
+
+def _pulisci_messaggio_log(messaggio: str) -> str:
+    return _PATTERN_PREFISSO_LOG.sub("", messaggio, count=1).strip()
+
+
+def _tronca_dettaglio_fase(messaggio_pulito: str) -> str:
+    """Le righe di avvio fase includono dopo un em-dash dettagli tecnici
+    (modello, GPU, nome file) utili nel log Docker ma non nel pannello
+    operatore, che deve mostrare solo "[N/4] Nome fase"."""
+    if _PATTERN_FASE.match(messaggio_pulito) and " — " in messaggio_pulito:
+        return messaggio_pulito.split(" — ", 1)[0].strip()
+    return messaggio_pulito
+
+
+def _riga_log_rilevante(livello: str, messaggio_pulito: str) -> bool:
+    if livello == "error":
+        return True
+    if livello == "warning":
+        return False
+    return any(p.search(messaggio_pulito) for p in _PATTERN_LOG_RILEVANTI)
+
+
+def formatta_log_righe(righe) -> list:
+    """
+    Converte le righe di LogElaborazione (ordinate cronologicamente, gia'
+    limitate a poche centinaia) nel formato per il pannello "Log tecnico":
+    - ora in fuso Europe/Rome (il timestamp e' salvato in UTC via
+      datetime.utcnow() in real_pipeline.py, va convertito per la UI);
+    - solo le righe rilevanti (vedi _riga_log_rilevante);
+    - messaggio ripulito dal prefisso data/livello gia' duplicato altrove.
+    """
+    risultato = []
+    for riga in righe:
+        livello = riga.livello.value if hasattr(riga.livello, "value") else str(riga.livello)
+        messaggio_pulito = _pulisci_messaggio_log(riga.messaggio)
+        if not _riga_log_rilevante(livello, messaggio_pulito):
+            continue
+        messaggio_pulito = _tronca_dettaglio_fase(messaggio_pulito)
+        ora_utc = riga.timestamp.replace(tzinfo=timezone.utc)
+        risultato.append({
+            "ora": ora_utc.astimezone(FUSO_ROMA).strftime("%H:%M:%S"),
+            "livello": livello,
+            "messaggio": messaggio_pulito,
+        })
+    return risultato
 
 
 def estrai_progresso_da_log(log_lines) -> dict:

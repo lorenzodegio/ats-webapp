@@ -78,7 +78,7 @@ def esegui_estrazione(input_dir: Path, output_dir: Path, solo_test: bool,
         log.info("Modalità TEST — elaboro solo la prima ricetta")
 
     log.info(
-        f"[1/4] Estrazione OCR — modello: {model or f'{ocr_cannabis.MODELLO_PESANTE} (pesante) / {ocr_cannabis.MODELLO_LEGGERO} (leggero)'} "
+        f"[2/4] Estrazione OCR — modello: {model or f'{ocr_cannabis.MODELLO_PESANTE} (pesante) / {ocr_cannabis.MODELLO_LEGGERO} (leggero)'} "
         f"| GPU: {gpu if gpu is not None else 'auto (decide Ollama)'} | Ricette: {len(pdf_files)}"
     )
 
@@ -122,9 +122,9 @@ def esegui_estrazione(input_dir: Path, output_dir: Path, solo_test: bool,
         json.dumps(riepilogo, indent=2, ensure_ascii=False), encoding="utf-8"
     )
 
-    log.info(f"[1/4] Completato: {len(risultati)}/{len(pdf_files)} ricette | {durata:.0f}s totali")
+    log.info(f"[2/4] Completato: {len(risultati)}/{len(pdf_files)} ricette | {durata:.0f}s totali")
     if errori:
-        log.warning(f"[1/4] Errori su: {errori}")
+        log.warning(f"[2/4] Errori su: {errori}")
 
     return riepilogo
 

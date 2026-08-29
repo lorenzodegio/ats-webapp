@@ -14,9 +14,22 @@ Percorsi (cartelle condivise via volume Docker, vedi docker-compose.yml):
     /dati/output          — JSON + Excel finale
 """
 
+import logging
 import sys
 import shutil
 from pathlib import Path
+
+# Configurato QUI, centralmente, prima di eseguire qualunque fase: la fase
+# "preprocessing" importa solo phase1_preprocess.py, che si limita a
+# logging.getLogger("Phase1") senza mai chiamare basicConfig. Le altre 3
+# fasi funzionano solo perche' importano pipeline.py, che lo fa come
+# effetto collaterale a livello di modulo — per preprocessing quell'effetto
+# collaterale non scatta mai, quindi i suoi logger.info() restavano scartati
+# in silenzio (livello di default WARNING, nessun handler) e non arrivavano
+# nemmeno sullo stdout grezzo del container. logging.basicConfig() e' un
+# no-op se il root logger e' gia' configurato, quindi il basicConfig dentro
+# pipeline.py per le altre fasi resta innocuo.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 DATI = Path("/dati")
 

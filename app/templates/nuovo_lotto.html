@@ -13,6 +13,19 @@
 <div class="errore-form">{{ request.query_params.get('errore') }}</div>
 {% endif %}
 
+{% if lotto_bloccante %}
+<div class="card">
+  <h2 class="card__titolo">Un'altra elaborazione è già in corso</h2>
+  <p style="color:var(--text-secondary); margin:10px 0 18px; max-width:520px;">
+    Solo un lotto alla volta può avere un'elaborazione Docker attiva (tutte le fasi
+    condividono la stessa cartella di lavoro). Il lotto <strong>{{ lotto_bloccante.nome }}</strong>
+    è attualmente in stato <strong>«{{ etichetta_stato_bloccante }}»</strong> — attendi che finisca,
+    oppure mettilo in pausa o annullalo dalla sua pagina, prima di crearne uno nuovo.
+  </p>
+  <a href="/lotti/{{ lotto_bloccante.id }}" class="btn btn--primario">Vai al lotto in elaborazione</a>
+</div>
+{% else %}
+
 <div class="wizard-steps wizard-steps--fasi" id="wizard-steps">
   {% for num, etichetta in fasi_wizard %}
   <div class="wizard-step{% if num == 1 %} wizard-step--attivo{% elif num > 3 %} wizard-step--bloccato{% endif %}"
@@ -63,13 +76,13 @@
       </div>
 
       <div class="campo">
-        <label>Excel regionale (opzionale in questa fase, puoi aggiungerlo dopo)</label>
+        <label>Excel regionale (obbligatorio)</label>
         <label class="dropzone" id="dropzone-excel" for="input-file-excel" style="padding:24px;">
           <div>Trascina qui l'Excel, oppure clicca per selezionarlo</div>
           <div style="font-size:12px; margin-top:6px;">Formato accettato: .xlsx / .xls</div>
           <div class="dropzone__nome-file" id="nome-file-excel"></div>
         </label>
-        <input type="file" id="input-file-excel" name="file_excel" accept=".xlsx,.xls" style="display:none">
+        <input type="file" id="input-file-excel" name="file_excel" accept=".xlsx,.xls" style="display:none" required>
       </div>
     </div>
 
@@ -104,8 +117,11 @@
     </div>
   </form>
 </div>
+{% endif %}
 {% endblock %}
 
 {% block script %}
+{% if not lotto_bloccante %}
 <script src="/static/js/wizard-nuovo-lotto.js"></script>
+{% endif %}
 {% endblock %}

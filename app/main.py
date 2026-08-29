@@ -30,6 +30,31 @@ app = FastAPI(title="ATS Gestione Prescrizioni Cannabis")
 SECRET_KEY = os.environ.get("SESSION_SECRET_KEY", "cambia-questa-chiave-in-produzione")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax")
 
+
+@app.middleware("http")
+async def _disabilita_cache_pagine_autenticate(request: Request, call_next):
+    """
+    Senza questo, dopo il logout il tasto "Indietro" del browser puo'
+    mostrare l'ultima pagina autenticata presa dalla cache locale (bfcache
+    di Chrome/Firefox, o la normale cache HTTP) invece di rifare la
+    richiesta al server: la sessione e' gia' invalidata lato server, ma
+    l'utente continua a vedere il contenuto vecchio finche' non interagisce
+    con la pagina. "no-store" impedisce al browser di salvare la risposta
+    ed esclude esplicitamente la pagina dalla bfcache (comportamento
+    documentato di Chrome/Firefox) — "Indietro" deve sempre rifare la
+    richiesta e ripassare dal controllo sessione in get_utente_opzionale.
+    I file statici (CSS/JS/immagini) restano cacheabili normalmente:
+    applicare no-store anche a loro li rallenterebbe senza nessun
+    beneficio di sicurezza (non contengono dati per-utente).
+    """
+    risposta = await call_next(request)
+    if not request.url.path.startswith("/static/"):
+        risposta.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
+        risposta.headers["Pragma"] = "no-cache"
+        risposta.headers["Expires"] = "0"
+    return risposta
+
+
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 app.include_router(auth_router.router)

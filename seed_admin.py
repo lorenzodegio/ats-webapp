@@ -9,6 +9,9 @@ import getpass
 import os
 from datetime import datetime, timedelta
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from app.database import Base, engine, SessionLocal
 from app.models import (
     Utente, RuoloUtente, Configurazione, LottoMensile, StatoLotto,
@@ -71,13 +74,24 @@ def crea_configurazione(db, admin):
         riga_backend.descrizione = "Pipeline OCR Docker reale (Ollama/Qwen)"
         db.commit()
         print("pipeline_backend aggiornato a 'reale'.")
-    if db.query(Configurazione).count() > 0:
-        print("Configurazione gia' presente, salto.")
-        return
+
+    # Per-chiave, non "salta tutto se esiste una riga qualsiasi": pipeline_backend
+    # viene creata gia' ad ogni avvio di uvicorn (assicura_pipeline_reale in
+    # main.py), quindi un controllo "count() > 0" faceva saltare per sempre
+    # la creazione di sharepoint_base_path/docker_project_path/ollama_host/
+    # ocr_score_soglia, che restavano assenti dal DB senza nessun errore.
+    chiavi_esistenti = {c.chiave for c in db.query(Configurazione.chiave).all()}
+    aggiunte = []
     for chiave, valore, descrizione in CONFIGURAZIONE_INIZIALE:
+        if chiave in chiavi_esistenti:
+            continue
         db.add(Configurazione(chiave=chiave, valore=valore, descrizione=descrizione, updated_by_id=admin.id))
-    db.commit()
-    print("Configurazione iniziale creata.")
+        aggiunte.append(chiave)
+    if aggiunte:
+        db.commit()
+        print(f"Configurazione aggiunta: {', '.join(aggiunte)}")
+    else:
+        print("Configurazione gia' presente, salto.")
 
 
 FARMACIE_INIZIALI = [

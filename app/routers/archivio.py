@@ -8,9 +8,11 @@ from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
 from app.auth import get_utente_corrente
 from app.models import Prescrizione, LottoMensile, Utente, DatiOcr
+from app.progresso import formatta_ora_locale
 
 router = APIRouter(tags=["archivio"])
 templates = Jinja2Templates(directory="app/templates")
+templates.env.filters["ora_locale"] = formatta_ora_locale
 
 LIMITE_PRESCRIZIONI = 500
 

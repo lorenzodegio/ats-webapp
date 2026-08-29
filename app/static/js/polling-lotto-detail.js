@@ -18,10 +18,18 @@
     const badgePausa = document.getElementById("badge-pausa");
     const formPausa = document.getElementById("form-pausa");
     const formRiprendi = document.getElementById("form-riprendi");
-    const progressoItemEl = document.getElementById("progresso-item-dettaglio");
     const statoMacchina = document.getElementById("stato-macchina");
     const statoTitolo = document.getElementById("stato-macchina-titolo");
     const statoMessaggio = document.getElementById("stato-macchina-messaggio");
+    const corpoLog = document.getElementById("tabella-log-dettaglio-corpo");
+    const contenitoreLog = document.getElementById("contenitore-log-dettaglio");
+    const CLASSE_BADGE_LIVELLO = { error: "badge--errore", warning: "badge--attesa", info: "badge--in-coda" };
+
+    function escapeHtml(testo) {
+      const div = document.createElement("div");
+      div.textContent = testo;
+      return div.innerHTML;
+    }
 
     async function aggiorna() {
       try {
@@ -40,17 +48,22 @@
           formRiprendi.style.display = inPausa ? "inline" : "none";
         }
 
-        if (progressoItemEl) {
-          progressoItemEl.textContent = dati.progresso_item
-            ? `${dati.progresso_item.attuale} di ${dati.progresso_item.totale} prescrizioni`
-            : "";
-        }
-
         if (statoMacchina) {
           const inPausa = dati.richiesta_controllo === "pausa";
           statoMacchina.classList.toggle("stato-macchina--pausa", inPausa);
           if (statoTitolo) statoTitolo.textContent = inPausa ? "In pausa" : "Lavorazione automatica";
           if (statoMessaggio) statoMessaggio.textContent = dati.messaggio_operatore || "Elaborazione in corso.";
+        }
+
+        if (corpoLog && Array.isArray(dati.log_righe)) {
+          corpoLog.innerHTML = dati.log_righe.map((riga) => `
+            <tr>
+              <td>${riga.ora}</td>
+              <td><span class="badge ${CLASSE_BADGE_LIVELLO[riga.livello] || "badge--in-coda"}">${riga.livello}</span></td>
+              <td>${escapeHtml(riga.messaggio)}</td>
+            </tr>
+          `).join("");
+          if (contenitoreLog) contenitoreLog.scrollTop = contenitoreLog.scrollHeight;
         }
 
         if (!dati.fase_attiva) {

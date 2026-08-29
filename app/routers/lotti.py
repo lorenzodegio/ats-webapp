@@ -4,17 +4,18 @@ di vita (revisione barcode, avvio fasi successive, gestione difformita,
 completamento, archiviazione).
 """
 import os
+import shutil
 import uuid
 import io
 import zipfile
 import re
-import pandas as pd
 from datetime import datetime, date
 from pathlib import Path
 
 from fastapi import APIRouter, Request, Depends, Form, UploadFile, File, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse, Response
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -23,34 +24,60 @@ from app.models import (
     LottoMensile, StatoLotto, CaricamentoFile, TipoCaricamento, StatoCaricamento,
     Prescrizione, StatoBarcode, Difformita, StatoDifformita, Elaborazione,
     StatoElaborazione, FaseElaborazione, Utente, StatoRevisionePrescrizione, DatiOcr,
-    GravitaDifformita,
+    GravitaDifformita, LogElaborazione,
 )
 from app.storage import (
-    SHAREPOINT_FINTO,
-    PERCORSO_CARTELLA_OUTPUT_RECENTI,
     MEDIA_ROOT,
     percorso_pdf_prescrizione as _percorso_pdf_prescrizione,
+    radice_sharepoint,
     risolvi_anteprima as _risolvi_anteprima,
     salva_pdf_caricato,
 )
 from app.real_pipeline import (
     avvia_preprocessing_reale, avvia_ocr_reale, avvia_difformita_reale,
     correggi_barcode_reale, scrivi_excel_finale_reale, esiste_lotto_in_esecuzione,
-    metti_in_pausa_container, riprendi_container, annulla_container,
+    lotto_in_esecuzione, metti_in_pausa_container, riprendi_container, annulla_container,
+    pulisci_dati_parziali_fase, log_elaborazione,
 )
 from app.progresso import (
     percentuale_avanzamento, etichetta_stato, ETICHETTE_STATO,
     estrai_progresso_da_log, messaggio_fase_operatore,
-    indice_fase_wizard, FASI_WIZARD_LOTTO,
+    indice_fase_wizard, FASI_WIZARD_LOTTO, formatta_log_righe, formatta_ora_locale,
 )
 
 router = APIRouter(tags=["lotti"])
 templates = Jinja2Templates(directory="app/templates")
+templates.env.filters["ora_locale"] = formatta_ora_locale
 
 UPLOAD_DIR_TEMP = "uploads"
 ESTENSIONI_PDF_VALIDE = {".pdf"}
 ESTENSIONI_EXCEL_VALIDE = {".xlsx", ".xls"}
 NUMERO_LOTTI_RECENTI = 10
+
+NUMERO_RIGHE_LOG = 300
+
+BADGE_LIVELLO_LOG = {"error": "badge--errore", "warning": "badge--attesa", "info": "badge--in-coda"}
+
+
+def _log_lotto(db: Session, lotto_id, limite: int = NUMERO_RIGHE_LOG):
+    """
+    Ultime `limite` righe di log di TUTTE le elaborazioni del lotto (non solo
+    quella attiva): passando da una fase alla successiva viene creata una
+    nuova Elaborazione, e il log della fase precedente deve restare visibile
+    nel pannello invece di sparire. Query diretta e limitata (non
+    elaborazione.log): quel campo puo' avere migliaia di righe.
+    """
+    righe = (
+        db.query(LogElaborazione)
+        .join(Elaborazione, LogElaborazione.elaborazione_id == Elaborazione.id)
+        .filter(Elaborazione.lotto_id == lotto_id)
+        .order_by(LogElaborazione.timestamp.desc())
+        .limit(limite)
+        .all()
+    )
+    righe.reverse()
+    return righe
+
 
 MESI_IT = ["", "GENNAIO", "FEBBRAIO", "MARZO", "APRILE", "MAGGIO", "GIUGNO",
            "LUGLIO", "AGOSTO", "SETTEMBRE", "OTTOBRE", "NOVEMBRE", "DICEMBRE"]
@@ -76,10 +103,6 @@ def _fase_vista_da_query(request: Request, lotto: LottoMensile) -> int:
     return max(1, min(corrente, richiesta))
 
 
-def _nome_cartella(mese: int, anno: int) -> str:
-    return f"{MESI_IT[mese]}_{anno}"
-
-
 def _prescrizione_del_lotto(db: Session, lotto_id: str, prescrizione_id: str):
     return (
         db.query(Prescrizione)
@@ -97,13 +120,18 @@ def _prescrizione_del_lotto(db: Session, lotto_id: str, prescrizione_id: str):
 # ============================================================
 
 @router.get("/lotti/nuovo", response_class=HTMLResponse)
-def form_nuovo_lotto(request: Request, utente: Utente = Depends(get_utente_corrente)):
+def form_nuovo_lotto(
+    request: Request, db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
+):
     oggi = datetime.utcnow()
+    lotto_bloccante = lotto_in_esecuzione(db)
     return templates.TemplateResponse(
         "nuovo_lotto.html",
         {"request": request, "utente": utente, "voce_attiva": "nuova",
          "mese_corrente": oggi.month, "anno_corrente": oggi.year,
-         "fasi_wizard": FASI_WIZARD_LOTTO},
+         "fasi_wizard": FASI_WIZARD_LOTTO,
+         "lotto_bloccante": lotto_bloccante,
+         "etichetta_stato_bloccante": etichetta_stato(lotto_bloccante.stato) if lotto_bloccante else None},
     )
 
 
@@ -115,7 +143,7 @@ def crea_lotto(
     mese: int = Form(...),
     anno: int = Form(...),
     file_pdf: UploadFile = File(...),
-    file_excel: UploadFile = File(None),
+    file_excel: UploadFile = File(...),
     db: Session = Depends(get_db),
     utente: Utente = Depends(get_utente_corrente),
 ):
@@ -123,9 +151,34 @@ def crea_lotto(
     if not nome:
         return RedirectResponse(url="/lotti/nuovo?errore=Il+nome+del+lotto+e%27+obbligatorio", status_code=302)
 
+    # Confronto case-insensitive: "Agosto 2026" e "agosto 2026" sono lo
+    # stesso nome per un operatore che sfoglia l'elenco, non vanno
+    # trattati come due lotti distinti solo per la differenza di maiuscole.
+    nome_gia_usato = (
+        db.query(LottoMensile)
+        .filter(func.lower(LottoMensile.nome) == nome.lower())
+        .first()
+    )
+    if nome_gia_usato:
+        return RedirectResponse(
+            url="/lotti/nuovo?errore=Esiste+gia%27+un+lotto+con+questo+nome,+scegline+uno+diverso",
+            status_code=302,
+        )
+
     _, ext_pdf = os.path.splitext(file_pdf.filename or "")
     if ext_pdf.lower() not in ESTENSIONI_PDF_VALIDE:
         return RedirectResponse(url="/lotti/nuovo?errore=Il+file+prescrizioni+deve+essere+un+PDF", status_code=302)
+
+    # L'Excel Regione e' obbligatorio: senza, pipeline.esegui_merge_regione
+    # viene saltato (vedi pipeline.py) e i check 14/17/18 in fase difformita
+    # segnalano "dati mancanti" per OGNI prescrizione — un lotto senza
+    # Excel Regione non produce risultati utilizzabili, quindi non deve
+    # nemmeno poter partire.
+    _, ext_excel = os.path.splitext(file_excel.filename or "")
+    if not file_excel.filename or ext_excel.lower() not in ESTENSIONI_EXCEL_VALIDE:
+        return RedirectResponse(
+            url="/lotti/nuovo?errore=L%27Excel+Regione+e%27+obbligatorio+(.xlsx+o+.xls)", status_code=302
+        )
 
     if esiste_lotto_in_esecuzione(db):
         return RedirectResponse(
@@ -142,33 +195,37 @@ def crea_lotto(
     db.commit()
     db.refresh(lotto)
 
-    # Cartella univoca per lotto: mese/anno da soli non bastano piu' a
-    # distinguere elaborazioni diverse dello stesso periodo. Il timestamp
-    # di creazione + le prime 8 cifre dell'UUID garantiscono unicita' anche
-    # in caso di doppio invio nello stesso secondo.
-    cartella = f"{_nome_cartella(mese, anno)}_{lotto.created_at:%Y%m%d%H%M%S}_{str(lotto.id)[:8]}"
-    lotto.sp_lavoro_path = f"LAVORO/MESE DI LAVORAZIONE/{cartella}"
-    lotto.sp_prescrizioni_path = f"LAVORO/MESE DI LAVORAZIONE/{cartella}/PRESCRIZIONI"
-    lotto.sp_output_path = "LAVORO/OUTPUT"
-    lotto.sp_archivio_path = f"ARCHIVIO/ELABORAZIONI RECENTI/{cartella}"
+    # Percorso unico e stabile per tutta la vita del lotto (in corso ->
+    # completato -> archiviato): niente piu' spostamento da una cartella
+    # "di lavoro" a una "di archivio", il lotto nasce gia' nella sua
+    # posizione definitiva sotto Macchina Locale/Archivio/{anno}/{mese}/.
+    # Il timestamp di creazione + le prime 8 cifre dell'UUID garantiscono
+    # unicita' anche in caso di doppio invio nello stesso secondo/mese.
+    cartella_mese = f"{mese:02d} - {MESI_IT[mese].capitalize()}"
+    cartella = f"{lotto.created_at:%Y%m%d%H%M%S}_{str(lotto.id)[:8]}"
+    base_lotto = f"Macchina Locale/Archivio/{anno}/{cartella_mese}/{cartella}"
+    lotto.sp_lavoro_path = base_lotto
+    lotto.sp_prescrizioni_path = f"{base_lotto}/PRESCRIZIONI"
+    lotto.sp_output_path = f"{base_lotto}/OUTPUT"
+    lotto.sp_archivio_path = base_lotto
     db.commit()
     db.refresh(lotto)
 
-    # Caricamento PDF combinato: salva per davvero nella cartella finta che
-    # simula SharePoint, e traccia il caricamento in CaricamentoFile.
+    # PDF combinato: salvato SOLO come input locale per la pipeline
+    # (media/lotti/{id}/originale/, letto da _copia_lotto_verso_dati in
+    # real_pipeline.py) — non viene piu' copiato anche su SharePoint in
+    # PRESCRIZIONI. Quella cartella deve contenere le ricette gia' divise
+    # per singola prescrizione, non il PDF multi-pagina originale:
+    # avvia_preprocessing_reale le pubblica li' a fine preprocessing
+    # (vedi _pubblica_prescrizioni_su_sharepoint).
     os.makedirs(UPLOAD_DIR_TEMP, exist_ok=True)
     contenuto_pdf = file_pdf.file.read()
-    salva_pdf_caricato(lotto.id, file_pdf.filename, contenuto_pdf)
-    percorso_relativo_pdf = f"{lotto.sp_prescrizioni_path}/{file_pdf.filename}"
-    percorso_assoluto_pdf = os.path.join(str(SHAREPOINT_FINTO), percorso_relativo_pdf)
-    os.makedirs(os.path.dirname(percorso_assoluto_pdf), exist_ok=True)
-    with open(percorso_assoluto_pdf, "wb") as f:
-        f.write(contenuto_pdf)
+    percorso_locale_pdf = salva_pdf_caricato(lotto.id, file_pdf.filename, contenuto_pdf)
 
     db.add(CaricamentoFile(
         lotto_id=lotto.id, tipo=TipoCaricamento.pdf_combined,
         nome_file_locale=file_pdf.filename, nome_file_sp=file_pdf.filename,
-        percorso_sp=percorso_relativo_pdf, dimensione_bytes=len(contenuto_pdf),
+        percorso_sp=percorso_locale_pdf, dimensione_bytes=len(contenuto_pdf),
         stato=StatoCaricamento.completato, caricato_da_id=utente.id,
         started_at=datetime.utcnow(), completed_at=datetime.utcnow(),
     ))
@@ -178,7 +235,7 @@ def crea_lotto(
         if ext_excel.lower() in ESTENSIONI_EXCEL_VALIDE:
             contenuto_excel = file_excel.file.read()
             percorso_relativo_excel = f"{lotto.sp_lavoro_path}/{file_excel.filename}"
-            percorso_assoluto_excel = os.path.join(str(SHAREPOINT_FINTO), percorso_relativo_excel)
+            percorso_assoluto_excel = os.path.join(str(radice_sharepoint()), percorso_relativo_excel)
             os.makedirs(os.path.dirname(percorso_assoluto_excel), exist_ok=True)
             with open(percorso_assoluto_excel, "wb") as f:
                 f.write(contenuto_excel)
@@ -244,6 +301,8 @@ def dettaglio_lotto(
         progresso_item = estrai_progresso_da_log(elaborazione_attiva.log)
         in_pausa = elaborazione_attiva.richiesta_controllo == "pausa"
 
+    log_righe = formatta_log_righe(_log_lotto(db, lotto.id))
+
     return templates.TemplateResponse(
         "lotto_detail.html",
         {
@@ -257,6 +316,8 @@ def dettaglio_lotto(
             "elaborazione_attiva": elaborazione_attiva,
             "progresso_item": progresso_item,
             "in_pausa": in_pausa,
+            "log_righe": log_righe,
+            "badge_livello_log": BADGE_LIVELLO_LOG,
             "messaggio_operatore": messaggio_fase_operatore(
                 elaborazione_attiva.fase if elaborazione_attiva else None,
                 in_pausa,
@@ -569,15 +630,6 @@ def export_zip(
     if lotto.stato != StatoLotto.completato and lotto.stato != StatoLotto.archiviato:
         return JSONResponse({"errore": "Il lotto deve essere completato per esportare lo ZIP"}, status_code=400)
 
-    percorso_excel = os.path.join(str(SHAREPOINT_FINTO), "LAVORO/OUTPUT", lotto.excel_output_filename)
-    if not os.path.exists(percorso_excel):
-        return JSONResponse({"errore": f"File Excel principale non trovato a {percorso_excel}"}, status_code=404)
-
-    try:
-        df = pd.read_excel(percorso_excel)
-    except Exception as e:
-        return JSONResponse({"errore": f"Errore nella lettura del file Excel principale: {e}"}, status_code=500)
-
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
         prescrizioni = lotto.prescrizioni
@@ -609,37 +661,6 @@ def export_zip(
                 if percorso_pdf:
                     nome_pdf = os.path.basename(p.sp_pdf_path or percorso_pdf)
                     zip_file.write(percorso_pdf, arcname=f"{nome_cartella}/{nome_pdf}")
-            
-            barcodes_gruppo = [p.barcode for p in prescs if p.barcode]
-            barcodes_set = set(barcodes_gruppo)
-            
-            colonna_barcode = None
-            for col in df.columns:
-                if str(col).upper() == "BARCODE":
-                    colonna_barcode = col
-                    break
-            
-            if colonna_barcode is not None:
-                df_farmacia = df[df[colonna_barcode].astype(str).str.strip().isin(barcodes_set)]
-            else:
-                colonna_farmacia = None
-                for col in df.columns:
-                    if "FARMACIA" in str(col).upper():
-                        colonna_farmacia = col
-                        break
-                if colonna_farmacia is not None:
-                    df_farmacia = df[df[colonna_farmacia].astype(str).str.contains(nome_cartella.replace("_", " "), case=False, na=False)]
-                else:
-                    df_farmacia = df.head(0)
-
-            excel_buffer = io.BytesIO()
-            with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-                df_farmacia.to_excel(writer, index=False, sheet_name="Prescrizioni")
-            
-            zip_file.writestr(
-                f"{nome_cartella}/Prescrizioni_{nome_cartella}.xlsx",
-                excel_buffer.getvalue()
-            )
 
     zip_buffer.seek(0)
     nome_zip = f"ESPORTAZIONE_FARMACIE_{lotto.nome}.zip"
@@ -747,14 +768,13 @@ def visualizza_output_excel(
     if lotto is None or not lotto.excel_output_filename:
         return JSONResponse({"errore": "Excel di output non ancora disponibile per questo lotto"}, status_code=404)
 
+    radice = radice_sharepoint()
     candidati = []
     if lotto.sp_output_path:
-        candidati.append(SHAREPOINT_FINTO / lotto.sp_output_path / lotto.excel_output_filename)
-    candidati.append(SHAREPOINT_FINTO / PERCORSO_CARTELLA_OUTPUT_RECENTI / lotto.excel_output_filename)
-    candidati.append(SHAREPOINT_FINTO / "LAVORO" / "OUTPUT" / lotto.excel_output_filename)
+        candidati.append(radice / lotto.sp_output_path / lotto.excel_output_filename)
     candidati.append(MEDIA_ROOT / "lotti" / str(lotto.id) / "pagine" / lotto.excel_output_filename)
     percorso = None
-    radici = (SHAREPOINT_FINTO.resolve(), MEDIA_ROOT.resolve())
+    radici = (radice.resolve(), MEDIA_ROOT.resolve())
     for candidato in candidati:
         try:
             risolto = candidato.resolve()
@@ -781,11 +801,11 @@ def archivia_lotto(
 ):
     lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
     if lotto and lotto.stato == StatoLotto.completato:
+        # Il lotto vive gia' nella sua posizione definitiva su SharePoint
+        # fin dalla creazione (Macchina Locale/Archivio/{anno}/{mese}/...):
+        # "archivia" e' solo un cambio di stato, nessun file da spostare.
         lotto.stato = StatoLotto.archiviato
         lotto.archiviato_at = datetime.utcnow()
-        lotto.sp_archivio_path = lotto.sp_archivio_path.replace(
-            "ARCHIVIO/ELABORAZIONI RECENTI", "ARCHIVIO/ELABORAZIONI PASSATE"
-        )
         db.commit()
     return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=6), status_code=302)
 
@@ -802,6 +822,7 @@ def metti_in_pausa(
     elaborazione = lotto.elaborazione_attiva if lotto else None
     if elaborazione and elaborazione.stato == StatoElaborazione.in_corso:
         elaborazione.richiesta_controllo = "pausa"
+        log_elaborazione(db, elaborazione, "Esecuzione messa in pausa dall'operatore")
         db.commit()
         if elaborazione.nome_container:
             metti_in_pausa_container(elaborazione.nome_container)
@@ -818,6 +839,7 @@ def riprendi(
         if elaborazione.nome_container:
             riprendi_container(elaborazione.nome_container)
         elaborazione.richiesta_controllo = None
+        log_elaborazione(db, elaborazione, "Esecuzione ripresa dall'operatore")
         db.commit()
     return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, lotto), status_code=302)
 
@@ -845,67 +867,88 @@ def riprova_lotto(
     """
     Rilancia la fase che ha interrotto il lotto (bottone "Riprova" sul
     banner di eccezione). La fase da riavviare si ricava dall'ultima
-    Elaborazione in stato "errore" per questo lotto — non serve un
-    campo dedicato sul lotto, e' gia' tutto tracciato li'.
+    Elaborazione in stato "errore" o "annullata" per questo lotto — non
+    serve un campo dedicato sul lotto, e' gia' tutto tracciato li'.
 
-    Prima di rilanciare, ripulisce gli eventuali dati parziali scritti
-    dal tentativo fallito (una fase puo' fallire a meta' ciclo, con
-    alcune prescrizioni gia' elaborate e altre no): senza questa
-    pulizia, un retry rischierebbe di creare doppioni.
+    Prima di rilanciare, ripulisce gli eventuali dati parziali scritti dal
+    tentativo interrotto (vedi pulisci_dati_parziali_fase in real_pipeline.py,
+    condivisa con "Annulla"): senza questa pulizia, un retry rischierebbe
+    di creare doppioni.
     """
     lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
     if lotto is None or lotto.stato != StatoLotto.eccezione:
         return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, lotto), status_code=302)
 
-    ultima_fallita = (
+    ultima_interrotta = (
         db.query(Elaborazione)
-        .filter(Elaborazione.lotto_id == lotto.id, Elaborazione.stato == StatoElaborazione.errore)
+        .filter(
+            Elaborazione.lotto_id == lotto.id,
+            Elaborazione.stato.in_([StatoElaborazione.errore, StatoElaborazione.annullata]),
+        )
         .order_by(Elaborazione.started_at.desc())
         .first()
     )
-    fase = ultima_fallita.fase if ultima_fallita else FaseElaborazione.preprocessing
+    fase = ultima_interrotta.fase if ultima_interrotta else FaseElaborazione.preprocessing
+    if ultima_interrotta:
+        log_elaborazione(db, ultima_interrotta, "Esecuzione riavviata dall'operatore")
 
     lotto.note = None
+    pulisci_dati_parziali_fase(db, lotto, fase)
 
     if fase == FaseElaborazione.preprocessing:
-        for p in list(lotto.prescrizioni):
-            db.delete(p)
         lotto.stato = StatoLotto.preprocessing
-        lotto.n_prescrizioni_totali = 0
-        lotto.n_barcode_letti = 0
-        lotto.n_barcode_undefined = 0
         db.commit()
         background_tasks.add_task(avvia_preprocessing_reale, lotto.id)
         return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=3), status_code=302)
 
     if fase == FaseElaborazione.vllm:
-        for p in lotto.prescrizioni:
-            if p.dati_ocr:
-                db.delete(p.dati_ocr)
-            p.score_ocr = None
-            p.n_campi_compilati = None
-            p.barcode_in_excel = None
-            p.riga_excel = None
-            p.sp_json_path = None
         lotto.stato = StatoLotto.elaborazione_ocr
-        lotto.score_ocr_medio = None
-        lotto.n_match_excel = 0
         db.commit()
         background_tasks.add_task(avvia_ocr_reale, lotto.id)
         return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=4), status_code=302)
 
     if fase == FaseElaborazione.difformita:
-        for p in lotto.prescrizioni:
-            for d in list(p.difformita):
-                db.delete(d)
         lotto.stato = StatoLotto.analisi_difformita
-        lotto.n_difformita_totali = 0
         db.commit()
         background_tasks.add_task(avvia_difformita_reale, lotto.id)
         return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=5), status_code=302)
-        return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=5), status_code=302)
 
     return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, lotto), status_code=302)
+
+
+@router.post("/lotti/{lotto_id}/elimina")
+def elimina_lotto(
+    lotto_id: str, db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
+):
+    """
+    Bottone "Elimina" sul banner di eccezione, alternativa a "Riprova":
+    invece di ripartire dalla stessa fase, butta via il lotto per intero
+    (record DB con cascade su prescrizioni/elaborazioni/log/difformita,
+    piu' i file media/SharePoint associati). Solo per lotti in eccezione —
+    non e' un'azione da poter fare su un lotto sano o gia' completato.
+    """
+    lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
+    if lotto is None or lotto.stato != StatoLotto.eccezione:
+        return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, lotto), status_code=302)
+
+    cartella_media = MEDIA_ROOT / "lotti" / str(lotto.id)
+    if cartella_media.is_dir():
+        try:
+            shutil.rmtree(cartella_media)
+        except OSError:
+            pass  # il record DB viene comunque cancellato, i file restano da ripulire a mano
+
+    if lotto.sp_lavoro_path:
+        cartella_sp = radice_sharepoint() / lotto.sp_lavoro_path
+        if cartella_sp.is_dir():
+            try:
+                shutil.rmtree(cartella_sp)
+            except OSError:
+                pass  # probabile lock di OneDrive in sync, non blocca l'eliminazione del record
+
+    db.delete(lotto)
+    db.commit()
+    return RedirectResponse(url="/lotti", status_code=302)
 
 
 # ============================================================
@@ -926,6 +969,8 @@ def stato_lotto(lotto_id: str, db: Session = Depends(get_db), utente: Utente = D
         progresso_item = estrai_progresso_da_log(log_ordinato)
         in_pausa = elaborazione_attiva.richiesta_controllo == "pausa"
 
+    log_righe = formatta_log_righe(_log_lotto(db, lotto.id))
+
     return {
         "id": str(lotto.id),
         "nome": lotto.nome,
@@ -942,4 +987,5 @@ def stato_lotto(lotto_id: str, db: Session = Depends(get_db), utente: Utente = D
         "n_prescrizioni_totali": lotto.n_prescrizioni_totali,
         "n_barcode_undefined": lotto.n_barcode_undefined,
         "n_difformita_totali": lotto.n_difformita_totali,
+        "log_righe": log_righe,
     }

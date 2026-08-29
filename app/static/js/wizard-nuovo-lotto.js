@@ -66,6 +66,15 @@
         alert("Il file prescrizioni deve essere in formato PDF.");
         return false;
       }
+      if (!inputExcel.files || inputExcel.files.length === 0) {
+        alert("Carica l'Excel Regione prima di continuare: senza, l'analisi delle difformità non è affidabile.");
+        return false;
+      }
+      const nomeExcel = inputExcel.files[0].name.toLowerCase();
+      if (!nomeExcel.endsWith(".xlsx") && !nomeExcel.endsWith(".xls")) {
+        alert("L'Excel Regione deve essere in formato .xlsx o .xls.");
+        return false;
+      }
     }
     return true;
   }

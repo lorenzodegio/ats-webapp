@@ -168,6 +168,29 @@ def _riga_da_regione(df_regione: pd.DataFrame, barcode: str) -> dict:
     return riga_vuota
 
 
+def _barcode_regione_senza_ricetta(df_regione: pd.DataFrame, ricette_dir: Path) -> list:
+    """
+    Barcode presenti nel file Excel Regione ma senza nessun PDF caricato
+    per quel barcode in questo lotto (indipendentemente dall'esito OCR:
+    un PDF caricato con OCR fallito non e' "orfano", la ricetta e'
+    comunque arrivata ed e' gestibile dall'operatore come oggi — qui
+    contano solo i barcode per cui non e' MAI arrivato un PDF).
+
+    Nell'ordine in cui compaiono nel file Regione, senza duplicati.
+    """
+    if ricette_dir is None or not ricette_dir.is_dir():
+        return []
+    barcode_caricati = {_normalizza_barcode(p.stem) for p in ricette_dir.glob("*.pdf")}
+    visti = set()
+    orfani = []
+    for norm in df_regione["_barcode_norm"]:
+        if not norm or norm in barcode_caricati or norm in visti:
+            continue
+        visti.add(norm)
+        orfani.append(norm)
+    return orfani
+
+
 def _allarga_tabelle_native(ws, ultima_riga_dati: int):
     """
     Il template ha 4 TABELLE EXCEL NATIVE (Tabella_REGIONE, Tabella_OCR,
@@ -347,17 +370,41 @@ def run(excel_path: Path, output_dir: Path, template_path: Path, ricette_dir: Pa
         log.info(f"  {barcode}: scritto in riga {riga_excel} ({dati.get('nome_cognome_assistito', '?')})")
         riga_excel += 1
 
+    # Barcode presenti nel file Regione ma per cui non e' mai arrivato un
+    # PDF in questo lotto: aggiunti come righe finali, solo colonna
+    # Regione valorizzata (OCR/LINK/difformita' vuoti, non essendoci
+    # nessuna ricetta su cui basarli) — cosi' non spariscono in silenzio
+    # dall'output finale solo perche' la farmacia non li ha spediti/caricati.
+    barcode_orfani = _barcode_regione_senza_ricetta(df_regione, ricette_dir)
+    for barcode in barcode_orfani:
+        riga_regione = _riga_da_regione(df_regione, barcode)
+        if riga_excel > righe_template_disponibili:
+            log.warning(
+                f"  Riga {riga_excel} oltre le {righe_template_disponibili} righe "
+                f"preformattate del template — formattazione non garantita per questa riga"
+            )
+        for nome_colonna, valore in riga_regione.items():
+            col_idx = intestazione.get(nome_colonna)
+            if col_idx:
+                ws.cell(row=riga_excel, column=col_idx, value=valore)
+        riga_excel += 1
+
     ultima_riga_dati = riga_excel - 1
     _allarga_tabelle_native(ws, ultima_riga_dati)
 
     out_path = output_dir / template_path.name
     try:
         wb.save(out_path)
-        log.info(f"\nSalvato: {out_path} — {riga_excel - 2}/{len(json_files)} ricette scritte")
+        log.info(
+            f"\nSalvato: {out_path} — {riga_excel - 2 - len(barcode_orfani)}/{len(json_files)} ricette scritte"
+            + (f", {len(barcode_orfani)} barcode Regione senza ricetta aggiunti in coda" if barcode_orfani else "")
+        )
     except Exception as e:
         log.error(f"Errore salvataggio Excel: {e}")
         return
 
+    if barcode_orfani:
+        log.warning(f"Barcode presenti in Regione ma senza nessun PDF caricato nel lotto: {barcode_orfani}")
     if non_trovate_in_regione:
         log.warning(f"Barcode senza corrispondenza in Regione: {non_trovate_in_regione}")
     if codici_non_mappati:
