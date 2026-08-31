@@ -15,6 +15,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.database import Base, engine, SessionLocal
 from app.config_helper import assicura_pipeline_reale
 from app.auth import RedirectLogin
+from app.real_pipeline import recupera_elaborazioni_orfane
 from app.routers import auth_router, dashboard, lotti, archivio, impostazioni
 
 # Crea le tabelle se non esistono (per dev; in produzione si userebbe Alembic)
@@ -22,6 +23,11 @@ Base.metadata.create_all(bind=engine)
 _db_avvio = SessionLocal()
 try:
     assicura_pipeline_reale(_db_avvio)
+    # Un riavvio del server (volontario, crash, o --reload durante lo
+    # sviluppo) uccide qualunque thread Python stesse seguendo
+    # un'elaborazione reale: senza questo, il lotto resta bloccato "in
+    # corso" per sempre, senza nessuna via di recupero dall'interfaccia.
+    recupera_elaborazioni_orfane(_db_avvio)
 finally:
     _db_avvio.close()
 

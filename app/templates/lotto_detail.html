@@ -2,7 +2,7 @@
 {% block titolo %}{{ lotto.nome }} — ATS Gestione Prescrizioni Cannabis{% endblock %}
 
 {% block contenuto %}
-<div class="main__header">
+<div class="main__header"{% if lotto.stato.value not in ["completato", "archiviato"] %} data-lotto-id="{{ lotto.id }}"{% endif %}>
   <div>
     <a href="/lotti" style="font-size:13px; color: var(--text-secondary);">&larr; Lotti recenti</a>
     <h1 style="margin-top:6px;">{{ lotto.nome }}</h1>

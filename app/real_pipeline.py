@@ -174,6 +174,46 @@ def _gestisci_annullamento(db: Session, lotto_id, elaborazione: Elaborazione) ->
     db.commit()
 
 
+def recupera_elaborazioni_orfane(db: Session) -> int:
+    """
+    Chiamata una volta all'avvio del processo (main.py). Qualunque
+    Elaborazione ancora "in_coda" o "in_corso" a questo punto e' per forza
+    orfana: se il thread Python che la seguiva fosse ancora vivo, questo
+    stesso processo non starebbe ripartendo da zero. Capita quando uvicorn
+    viene riavviato mentre un'elaborazione reale e' in corso — il vecchio
+    thread muore con il processo, senza mai passare dal proprio gestore
+    di errori/annullamento.
+
+    Senza questo, il lotto resta bloccato "in corso" per sempre, senza
+    nessuna via di recupero funzionante dall'interfaccia: ne' "Annulla"
+    (imposta solo un flag che nessun ciclo vivo legge piu') ne' "Riprova"
+    (visibile solo per lotti gia' in stato "eccezione") hanno effetto.
+    Qui vengono marcate esplicitamente come "errore" cosi' il lotto passa
+    a eccezione e "Riprova"/"Elimina" tornano disponibili.
+    """
+    orfane = (
+        db.query(Elaborazione)
+        .filter(Elaborazione.stato.in_([StatoElaborazione.in_coda, StatoElaborazione.in_corso]))
+        .all()
+    )
+    for elaborazione in orfane:
+        messaggio = "Elaborazione interrotta da un riavvio del server, segnata come fallita"
+        log_elaborazione(db, elaborazione, messaggio, LivelloLog.error)
+        elaborazione.stato = StatoElaborazione.errore
+        elaborazione.richiesta_controllo = None
+        elaborazione.finished_at = datetime.utcnow()
+        lotto = db.query(LottoMensile).filter(LottoMensile.id == elaborazione.lotto_id).first()
+        if lotto:
+            pulisci_dati_parziali_fase(db, lotto, elaborazione.fase)
+            lotto.stato = StatoLotto.eccezione
+            lotto.note = ((lotto.note or "") + f"\n[{datetime.utcnow():%d/%m %H:%M}] {messaggio}").strip()
+            lotto.updated_at = datetime.utcnow()
+    db.commit()
+    if orfane:
+        log.warning(f"Recuperate {len(orfane)} elaborazioni orfane all'avvio: {[str(e.id) for e in orfane]}")
+    return len(orfane)
+
+
 def metti_in_pausa_container(nome_container: str) -> bool:
     """
     Comando diretto (docker pause), chiamato dalla route non appena
@@ -367,7 +407,35 @@ def _normalizza_dati_ocr(dati_grezzi: dict) -> dict:
             normalizzato[chiave] = _parse_prezzo(valore)
         else:
             normalizzato[chiave] = valore or None
-    return normalizzato
+    return _scarta_valori_troppo_lunghi(normalizzato)
+
+
+def _scarta_valori_troppo_lunghi(campi: dict) -> dict:
+    """
+    Un valore letto dall'OCR che supera la lunghezza massima della sua
+    colonna (es. codice_fiscale > 16 caratteri — un CF valido e' sempre
+    esattamente 16, quindi oltre e' quasi certamente un errore di lettura)
+    farebbe fallire l'inserimento non solo di questa ricetta ma
+    dell'INTERO lotto di ricette scritte insieme in una sola transazione
+    (vedi avvia_ocr_reale). Meglio azzerare il singolo campo e proseguire:
+    l'assenza verra' comunque segnalata dai controlli di difformita' gia'
+    esistenti (es. check_18 sul codice fiscale), invece di perdere tutte
+    le altre ricette del lotto per l'errore di lettura di una sola.
+    """
+    lunghezze_colonne = {
+        col.name: col.type.length
+        for col in DatiOcr.__table__.columns
+        if getattr(col.type, "length", None)
+    }
+    for chiave, valore in list(campi.items()):
+        limite = lunghezze_colonne.get(chiave)
+        if limite and isinstance(valore, str) and len(valore) > limite:
+            log.warning(
+                f"  Campo '{chiave}' scartato: {len(valore)} caratteri, oltre il limite "
+                f"di {limite} (valore: '{valore[:40]}...')"
+            )
+            campi[chiave] = None
+    return campi
 
 
 def _copia_lotto_verso_dati(lotto: LottoMensile) -> None:
@@ -478,11 +546,14 @@ def avvia_preprocessing_reale(lotto_id) -> None:
         _gestisci_annullamento(db, lotto_id, elaborazione)
     except Exception as exc:
         log.exception("Errore in avvia_preprocessing_reale")
+        db.rollback()
+        elaborazione.stato = StatoElaborazione.errore
+        elaborazione.finished_at = datetime.utcnow()
         lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
         if lotto:
             lotto.stato = StatoLotto.eccezione
             lotto.note = ((lotto.note or "") + f"\n[{datetime.utcnow():%d/%m %H:%M}] Preprocessing: {exc}").strip()
-            db.commit()
+        db.commit()
     finally:
         db.close()
 
@@ -598,11 +669,14 @@ def avvia_ocr_reale(lotto_id) -> None:
         _gestisci_annullamento(db, lotto_id, elaborazione)
     except Exception as exc:
         log.exception("Errore in avvia_ocr_reale")
+        db.rollback()
+        elaborazione.stato = StatoElaborazione.errore
+        elaborazione.finished_at = datetime.utcnow()
         lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
         if lotto:
             lotto.stato = StatoLotto.eccezione
             lotto.note = ((lotto.note or "") + f"\n[{datetime.utcnow():%d/%m %H:%M}] OCR: {exc}").strip()
-            db.commit()
+        db.commit()
     finally:
         db.close()
 
@@ -675,11 +749,14 @@ def avvia_difformita_reale(lotto_id) -> None:
         _gestisci_annullamento(db, lotto_id, elaborazione)
     except Exception as exc:
         log.exception("Errore in avvia_difformita_reale")
+        db.rollback()
+        elaborazione.stato = StatoElaborazione.errore
+        elaborazione.finished_at = datetime.utcnow()
         lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
         if lotto:
             lotto.stato = StatoLotto.eccezione
             lotto.note = ((lotto.note or "") + f"\n[{datetime.utcnow():%d/%m %H:%M}] Difformita: {exc}").strip()
-            db.commit()
+        db.commit()
     finally:
         db.close()
 
@@ -791,10 +868,13 @@ def scrivi_excel_finale_reale(lotto_id) -> bool:
         return False
     except Exception as exc:
         log.exception("Errore in scrivi_excel_finale_reale")
+        db.rollback()
+        elaborazione.stato = StatoElaborazione.errore
+        elaborazione.finished_at = datetime.utcnow()
         lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
         if lotto:
             lotto.note = ((lotto.note or "") + f"\n[{datetime.utcnow():%d/%m %H:%M}] Scrittura Excel: {exc}").strip()
-            db.commit()
+        db.commit()
         return False
     finally:
         db.close()

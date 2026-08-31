@@ -9,20 +9,18 @@
 
   // ─── 1. Polling avanzamento ───────────────────────────────────────────────
 
-  const pannello = document.getElementById("pannello-avanzamento-dettaglio");
-  if (pannello) {
-    const lottoId = pannello.dataset.lottoId;
-    const barra = document.getElementById("barra-progresso-dettaglio");
-    const percentualeEl = document.getElementById("percentuale-dettaglio");
-    const etichetta = document.getElementById("etichetta-fase-dettaglio");
-    const badgePausa = document.getElementById("badge-pausa");
-    const formPausa = document.getElementById("form-pausa");
-    const formRiprendi = document.getElementById("form-riprendi");
-    const statoMacchina = document.getElementById("stato-macchina");
-    const statoTitolo = document.getElementById("stato-macchina-titolo");
-    const statoMessaggio = document.getElementById("stato-macchina-messaggio");
-    const corpoLog = document.getElementById("tabella-log-dettaglio-corpo");
-    const contenitoreLog = document.getElementById("contenitore-log-dettaglio");
+  // L'id del lotto si legge dall'intestazione della pagina (sempre presente),
+  // non dal pannello di avanzamento: quel pannello dipende da
+  // elaborazione_attiva, che al primissimo caricamento dopo la creazione
+  // del lotto puo' essere ancora None — il background task che crea la
+  // riga Elaborazione parte solo DOPO che la risposta HTTP e' stata
+  // inviata (cosi' funzionano i BackgroundTasks di FastAPI), quindi la
+  // primissima pagina puo' arrivare prima che quella riga esista ancora.
+  // Il polling deve partire comunque, per accorgersi quando compare.
+  const intestazione = document.querySelector(".main__header[data-lotto-id]");
+  const lottoId = intestazione ? intestazione.dataset.lottoId : null;
+
+  if (lottoId) {
     const CLASSE_BADGE_LIVELLO = { error: "badge--errore", warning: "badge--attesa", info: "badge--in-coda" };
 
     function escapeHtml(testo) {
@@ -36,6 +34,32 @@
         const risposta = await fetch(`/lotti/${lottoId}/stato`);
         if (!risposta.ok) return;
         const dati = await risposta.json();
+
+        // Cercati ad ogni tick (non una volta sola all'avvio): possono non
+        // esistere ancora nella primissima pagina, vedi commento sopra.
+        const pannello = document.getElementById("pannello-avanzamento-dettaglio");
+
+        if (dati.fase_attiva && !pannello) {
+          // Il server dice che un'elaborazione e' partita, ma questa pagina
+          // e' stata renderizzata prima che accadesse: ricarica per
+          // ottenere il pannello, lo stepper e tutto il resto coerenti
+          // con lo stato reale, invece di provare a ricostruirli a mano.
+          window.location.reload();
+          return;
+        }
+        if (!pannello) return; // nulla in corso, nulla da aggiornare
+
+        const barra = document.getElementById("barra-progresso-dettaglio");
+        const percentualeEl = document.getElementById("percentuale-dettaglio");
+        const etichetta = document.getElementById("etichetta-fase-dettaglio");
+        const badgePausa = document.getElementById("badge-pausa");
+        const formPausa = document.getElementById("form-pausa");
+        const formRiprendi = document.getElementById("form-riprendi");
+        const statoMacchina = document.getElementById("stato-macchina");
+        const statoTitolo = document.getElementById("stato-macchina-titolo");
+        const statoMessaggio = document.getElementById("stato-macchina-messaggio");
+        const corpoLog = document.getElementById("tabella-log-dettaglio-corpo");
+        const contenitoreLog = document.getElementById("contenitore-log-dettaglio");
 
         if (barra) barra.style.width = `${dati.percentuale}%`;
         if (percentualeEl) percentualeEl.textContent = `${dati.percentuale}%`;
@@ -75,6 +99,7 @@
       }
     }
 
+    aggiorna();
     setInterval(aggiorna, 2000);
   }
 
