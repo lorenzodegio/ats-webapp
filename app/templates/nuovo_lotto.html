@@ -15,12 +15,16 @@
 
 {% if lotto_bloccante %}
 <div class="card">
-  <h2 class="card__titolo">Un'altra elaborazione è già in corso</h2>
-  <p style="color:var(--text-secondary); margin:10px 0 18px; max-width:520px;">
-    Solo un lotto alla volta può avere un'elaborazione Docker attiva (tutte le fasi
-    condividono la stessa cartella di lavoro). Il lotto <strong>{{ lotto_bloccante.nome }}</strong>
-    è attualmente in stato <strong>«{{ etichetta_stato_bloccante }}»</strong> — attendi che finisca,
-    oppure mettilo in pausa o annullalo dalla sua pagina, prima di crearne uno nuovo.
+  <h2 class="card__titolo">Un altro lotto è ancora in lavorazione</h2>
+  <p style="color:var(--text-secondary); margin:10px 0 18px;">
+    Solo un lotto alla volta può essere in lavorazione, dalla creazione fino al
+    completamento — anche durante le fasi di revisione manuale, non solo mentre
+    gira un container: tutte le fasi condividono la stessa cartella di lavoro, e i
+    dati intermedi di un lotto andrebbero persi se un altro lotto la svuotasse nel
+    frattempo. Il lotto <strong>{{ lotto_bloccante.nome }}</strong> è attualmente in stato
+    <strong>«{{ etichetta_stato_bloccante }}»</strong> — completalo (o, se è
+    un'elaborazione attiva, mettila in pausa o annullala dalla sua pagina) prima di
+    crearne uno nuovo.
   </p>
   <a href="/lotti/{{ lotto_bloccante.id }}" class="btn btn--primario">Vai al lotto in elaborazione</a>
 </div>
@@ -68,8 +72,8 @@
       <div class="campo">
         <label>Prescrizioni (obbligatorio)</label>
         <div style="display:flex; gap:8px; margin-bottom:12px;">
-          <button type="button" class="btn btn--primario" id="btn-modo-combinato">PDF combinato</button>
-          <button type="button" class="btn btn--secondario" id="btn-modo-cartella">Cartella di PDF separati</button>
+          <button type="button" class="btn btn--primario" id="btn-modo-combinato">Carica un solo PDF di una farmacia</button>
+          <button type="button" class="btn btn--secondario" id="btn-modo-cartella">Carica cartella PDF di più farmacie</button>
         </div>
 
         <div id="blocco-modo-combinato">
