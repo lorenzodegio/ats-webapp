@@ -25,10 +25,11 @@ from app.models import (
     LottoMensile, StatoLotto, CaricamentoFile, TipoCaricamento, StatoCaricamento,
     Prescrizione, StatoBarcode, Difformita, StatoDifformita, Elaborazione,
     StatoElaborazione, FaseElaborazione, Utente, StatoRevisionePrescrizione, DatiOcr,
-    GravitaDifformita, LogElaborazione,
+    GravitaDifformita, LogElaborazione, DecisioneEtichettaMancante,
 )
 from app.storage import (
     MEDIA_ROOT,
+    nome_file_sicuro,
     percorso_pdf_prescrizione as _percorso_pdf_prescrizione,
     radice_sharepoint,
     risolvi_anteprima as _risolvi_anteprima,
@@ -200,10 +201,11 @@ def crea_lotto(
         )
 
     if esiste_lotto_in_esecuzione(db):
-        return RedirectResponse(
-            url="/lotti/nuovo?errore=Un%27altra+elaborazione+Docker+e%27+gia%27+in+corso,+attendi+che+finisca",
-            status_code=302,
-        )
+        # Niente ?errore= qui: la pagina GET /lotti/nuovo rileva da sola il
+        # lotto bloccante (lotto_in_esecuzione) e mostra gia' una card intera
+        # con spiegazione e pulsante — aggiungere anche il banner generico
+        # duplicava lo stesso messaggio due volte sulla stessa pagina.
+        return RedirectResponse(url="/lotti/nuovo", status_code=302)
 
     lotto = LottoMensile(
         mese=mese, anno=anno, nome=nome,
@@ -218,10 +220,23 @@ def crea_lotto(
     # completato -> archiviato): niente piu' spostamento da una cartella
     # "di lavoro" a una "di archivio", il lotto nasce gia' nella sua
     # posizione definitiva sotto Macchina Locale/Archivio/{anno}/{mese}/.
-    # Il timestamp di creazione + le prime 8 cifre dell'UUID garantiscono
-    # unicita' anche in caso di doppio invio nello stesso secondo/mese.
+    # La sottocartella prende il nome del lotto (gia' garantito univoco
+    # dal controllo poco sopra) — piu' leggibile per chi sfoglia
+    # SharePoint a mano di un timestamp+UUID. In piu', un controllo
+    # difensivo sul disco: la sanificazione del nome (nome_file_sicuro)
+    # potrebbe in teoria far collassare due nomi diversi sulla stessa
+    # cartella (es. "Test!" e "Test?" diventano entrambi "Test") anche
+    # se il nome grezzo e' unico nel DB — un suffisso numerico evita che
+    # un lotto sovrascriva silenziosamente le cartelle di un altro.
     cartella_mese = f"{mese:02d} - {MESI_IT[mese].capitalize()}"
-    cartella = f"{lotto.created_at:%Y%m%d%H%M%S}_{str(lotto.id)[:8]}"
+    cartella = nome_file_sicuro(lotto.nome, default=str(lotto.id)[:8])
+    radice_mese = radice_sharepoint() / "Macchina Locale" / "Archivio" / str(anno) / cartella_mese
+    contatore = 1
+    cartella_finale = cartella
+    while (radice_mese / cartella_finale).exists():
+        contatore += 1
+        cartella_finale = f"{cartella}_{contatore}"
+    cartella = cartella_finale
     base_lotto = f"Macchina Locale/Archivio/{anno}/{cartella_mese}/{cartella}"
     lotto.sp_lavoro_path = base_lotto
     lotto.sp_prescrizioni_path = f"{base_lotto}/PRESCRIZIONI"
@@ -279,6 +294,29 @@ def crea_lotto(
 # Lista e dettaglio
 # ============================================================
 
+# Segnalazione "etichetta mancante": stessa logica di
+# phase4_excel.py:COLONNA_ETICHETTA_MANCANTE (le difformita' 11+12+13+16
+# dipendono tutte da dati leggibili solo sull'etichetta — se scattano
+# tutte insieme, e' quasi certo che l'etichetta manchi del tutto). Il
+# codice 19 (nome paziente etichetta) non entra nel trigger — troppo
+# esposto a falsi positivi da solo — ma va escluso insieme agli altri
+# quando l'operatore conferma che l'etichetta manca davvero.
+CODICI_ETICHETTA_MANCANTE_TRIGGER = {"11", "12", "13", "16"}
+CODICI_ETICHETTA_MANCANTE_ESCLUSIONE = {"11", "12", "13", "16", "19"}
+
+
+def _serve_segnalazione_etichetta_mancante(presc: Prescrizione) -> bool:
+    if presc.decisione_etichetta_mancante is not None:
+        return False
+    codici_presc = {d.codice for d in presc.difformita}
+    if not CODICI_ETICHETTA_MANCANTE_TRIGGER.issubset(codici_presc):
+        return False
+    return any(
+        d.codice in CODICI_ETICHETTA_MANCANTE_ESCLUSIONE and d.stato == StatoDifformita.rilevata
+        for d in presc.difformita
+    )
+
+
 @router.get("/lotti", response_class=HTMLResponse)
 def lista_lotti(request: Request, db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente)):
     lotti = (
@@ -313,13 +351,16 @@ def dettaglio_lotto(
     prescrizioni_undefined = [p for p in lotto.prescrizioni if p.stato_barcode == StatoBarcode.undefined]
     difformita_lotto = [d for p in lotto.prescrizioni for d in p.difformita]
     difformita_da_gestire = [d for d in difformita_lotto if d.stato == StatoDifformita.rilevata]
+    prescrizioni_etichetta_mancante = [p for p in lotto.prescrizioni if _serve_segnalazione_etichetta_mancante(p)]
 
     elaborazione_attiva = lotto.elaborazione_attiva
     progresso_item = None
     in_pausa = False
+    annullamento_in_corso = False
     if elaborazione_attiva:
         progresso_item = estrai_progresso_da_log(elaborazione_attiva.log)
         in_pausa = elaborazione_attiva.richiesta_controllo == "pausa"
+        annullamento_in_corso = elaborazione_attiva.richiesta_controllo == "annulla"
 
     log_righe = formatta_log_righe(_log_lotto(db, lotto.id))
 
@@ -333,9 +374,11 @@ def dettaglio_lotto(
             "prescrizioni_undefined": prescrizioni_undefined,
             "difformita_lotto": difformita_lotto,
             "difformita_da_gestire": difformita_da_gestire,
+            "prescrizioni_etichetta_mancante": prescrizioni_etichetta_mancante,
             "elaborazione_attiva": elaborazione_attiva,
             "progresso_item": progresso_item,
             "in_pausa": in_pausa,
+            "annullamento_in_corso": annullamento_in_corso,
             "log_righe": log_righe,
             "badge_livello_log": BADGE_LIVELLO_LOG,
             "messaggio_operatore": messaggio_fase_operatore(
@@ -446,9 +489,12 @@ ETICHETTE_CAMPO_OCR = {
     "testo_prescrizione": "Testo prescrizione",
     "metodo_estrattivo_olio": "Metodo estrattivo olio",
     "forma_farmaceutica": "Forma farmaceutica",
-    "data_prescrizione": "Data prescrizione",
+    # data_prescrizione e data_invio NON compaiono qui: vengono prese sempre
+    # dall'Excel Regione (merge_regione.py:sostituisci_data_con_regione), mai
+    # dalla lettura OCR del PDF, quindi non hanno senso in una pagina di
+    # revisione/correzione OCR — restano comunque in COLONNE_DATI_OCR sotto
+    # e in dati_ocr, semplicemente non editabili da qui.
     "data_etichetta_preparazione": "Data preparazione etichetta",
-    "data_invio": "Data invio / emissione",
     "etichetta_data_scadenza": "Data scadenza etichetta",
     "timbro_medico": "Timbro medico",
     "firma_medico": "Firma medico",
@@ -578,6 +624,41 @@ def gestisci_difformita(
         d.stato = StatoDifformita.confermata if azione == "conferma" else StatoDifformita.esclusa
         d.gestita_da_id = utente.id
         d.gestita_at = datetime.utcnow()
+        db.commit()
+    if next.startswith(f"/lotti/{lotto_id}/"):
+        return RedirectResponse(url=next, status_code=302)
+    return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=5), status_code=302)
+
+
+@router.post("/lotti/{lotto_id}/prescrizioni/{prescrizione_id}/etichetta-mancante/{azione}")
+def gestisci_etichetta_mancante(
+    lotto_id: str, prescrizione_id: str, azione: str,
+    db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
+    next: str = Form(""),
+):
+    """
+    Segnalazione automatica "etichetta mancante" (vedi
+    _serve_segnalazione_etichetta_mancante sopra). "conferma" = l'operatore
+    conferma che l'etichetta manca davvero: le difformita' 11/12/13/16/19
+    ancora "rilevata" di questa prescrizione vengono escluse in blocco
+    (dipendono tutte da dati leggibili solo sull'etichetta). "escludi" =
+    falso allarme, l'etichetta e' presente: nessuna difformita' viene
+    toccata, restano da gestire singolarmente come al solito.
+    """
+    if azione not in ("conferma", "escludi"):
+        return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+
+    presc = _prescrizione_del_lotto(db, lotto_id, prescrizione_id)
+    if presc is not None:
+        if azione == "conferma":
+            presc.decisione_etichetta_mancante = DecisioneEtichettaMancante.confermata
+            for d in presc.difformita:
+                if d.codice in CODICI_ETICHETTA_MANCANTE_ESCLUSIONE and d.stato == StatoDifformita.rilevata:
+                    d.stato = StatoDifformita.esclusa
+                    d.gestita_da_id = utente.id
+                    d.gestita_at = datetime.utcnow()
+        else:
+            presc.decisione_etichetta_mancante = DecisioneEtichettaMancante.esclusa
         db.commit()
     if next.startswith(f"/lotti/{lotto_id}/"):
         return RedirectResponse(url=next, status_code=302)
@@ -840,7 +921,14 @@ def metti_in_pausa(
 ):
     lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
     elaborazione = lotto.elaborazione_attiva if lotto else None
-    if elaborazione and elaborazione.stato == StatoElaborazione.in_corso:
+    # Non sovrascrivere un annullamento gia' richiesto: "annulla" e' un
+    # comando terminale (il lotto va comunque in eccezione), mentre
+    # "pausa" e' temporaneo — se richiesta_controllo era gia' "annulla"
+    # (es. il container non esisteva ancora, quindi non c'era nulla da
+    # uccidere subito, e la richiesta resta in attesa che il container
+    # parta), un click su "pausa" nel frattempo la cancellava in
+    # silenzio, lasciando l'elaborazione bloccata per sempre.
+    if elaborazione and elaborazione.stato == StatoElaborazione.in_corso and elaborazione.richiesta_controllo != "annulla":
         elaborazione.richiesta_controllo = "pausa"
         log_elaborazione(db, elaborazione, "Esecuzione messa in pausa dall'operatore")
         db.commit()
@@ -932,6 +1020,20 @@ def riprova_lotto(
         db.commit()
         background_tasks.add_task(avvia_difformita_reale, lotto.id)
         return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=5), status_code=302)
+
+    if fase == FaseElaborazione.completa:
+        # Sincrona come /completa (non e' un BackgroundTask): scrivi_excel_finale_reale
+        # gira nella richiesta stessa, non in un thread separato.
+        lotto.stato = StatoLotto.revisione_difformita
+        db.commit()
+        successo = scrivi_excel_finale_reale(lotto.id)
+        db.refresh(lotto)
+        if successo:
+            lotto.stato = StatoLotto.completato
+            lotto.completato_at = datetime.utcnow()
+            db.commit()
+            return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=6), status_code=302)
+        return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, lotto), status_code=302)
 
     return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, lotto), status_code=302)
 

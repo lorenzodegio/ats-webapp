@@ -13,11 +13,19 @@ in produzione): prima di ogni fase i file del lotto vengono copiati da
 li' a ./dati, dopo ogni fase i risultati vengono raccolti da ./dati e
 salvati nella posizione permanente del lotto.
 
-Vincolo importante: un solo lotto alla volta puo' avere un container in
-esecuzione, perche' tutti condividono la stessa cartella ./dati (stesso
-vincolo gia' imposto da Francesco con esiste_job_in_esecuzione, qui
-esiste_lotto_in_esecuzione). Lotti in fase di revisione (che non usano
-Docker) possono invece coesistere tranquillamente.
+Vincolo importante: un solo lotto alla volta puo' essere "in corso" —
+dalla creazione fino a completato/archiviato/eccezione — non solo mentre
+ha un container Docker realmente in esecuzione (vedi esiste_lotto_in_esecuzione
+piu' sotto, ereditato da esiste_job_in_esecuzione di Francesco). Le fasi
+di revisione manuale (barcode/qualita'/difformita') NON hanno un
+container attivo, ma NON possono comunque coesistere con un altro
+lotto: i JSON prodotti da OCR/difformita' restano nella cartella
+condivisa ./dati/output finche' la fase Excel finale non li legge, e
+quella cartella viene svuotata dal PROSSIMO preprocessing di
+QUALUNQUE lotto — se un secondo lotto partisse mentre il primo aspetta
+solo una revisione manuale, i suoi JSON sparirebbero in silenzio,
+scoperto solo quando quel lotto arriva a "Completa" e non trova piu'
+nulla (bug reale, gia' capitato — vedi STATI_LOTTO_OCCUPATO piu' sotto).
 
 NON TESTATO END-TO-END: scritto senza un ambiente Docker/Ollama
 disponibile. La logica di orchestrazione e il parsing dei JSON sono
@@ -37,6 +45,7 @@ from datetime import datetime, date
 from pathlib import Path
 
 import openpyxl
+from openpyxl.styles import Font, PatternFill
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
@@ -50,6 +59,7 @@ from app.storage import (
     cartella_pagine_lotto,
     nome_file_sicuro,
     pdf_originali_lotto,
+    percorso_pdf_prescrizione,
     pubblica_file,
     pubblica_output_preprocessing,
     radice_sharepoint,
@@ -89,6 +99,13 @@ MAPPA_CAMPI_OCR = {
     "THC": "etichetta_thc",
 }
 
+# Inversa di MAPPA_CAMPI_OCR: dal nome colonna DatiOcr alla chiave grezza
+# che i file JSON su disco (letti da fase3-difformita e fase4-excel) si
+# aspettano — serve per riportare le correzioni manuali dell'operatore
+# (vedi _applica_correzioni_ocr_su_json) sugli stessi nomi campo con cui
+# la pipeline li ha scritti originariamente.
+MAPPA_CAMPI_OCR_INVERSA = {v: k for k, v in MAPPA_CAMPI_OCR.items()}
+
 CAMPI_DATA = {
     "data_prescrizione", "data_etichetta_preparazione", "data_invio", "etichetta_data_scadenza",
 }
@@ -108,6 +125,14 @@ COLONNE_DATI_OCR = {
     "etichetta_prezzo_iva", "etichetta_prezzo_tot", "totale_prescrizione",
     "etichetta_thc", "nome_farmacia", "etichetta_avvertenze",
 }
+
+# data_prescrizione e data_invio (= data_emissione) vengono presi SEMPRE
+# dall'Excel Regione, mai dalla lettura OCR del PDF (vedi
+# merge_regione.py:sostituisci_data_con_regione) — la loro presenza/assenza
+# non dice nulla sulla qualita' della lettura OCR, quindi vanno esclusi sia
+# dallo score OCR sia dal conteggio "campi compilati" (24 - 2 = 22).
+CAMPI_ORIGINE_REGIONE = {"data_prescrizione", "data_invio"}
+CAMPI_SCORE_OCR = COLONNE_DATI_OCR - CAMPI_ORIGINE_REGIONE
 
 
 class LottoGiaInEsecuzione(Exception):
@@ -152,6 +177,7 @@ def pulisci_dati_parziali_fase(db: Session, lotto: LottoMensile, fase: FaseElabo
         for p in lotto.prescrizioni:
             for d in list(p.difformita):
                 db.delete(d)
+            p.decisione_etichetta_mancante = None
         lotto.n_difformita_totali = 0
     elif fase == FaseElaborazione.completa:
         lotto.excel_output_filename = None
@@ -249,18 +275,43 @@ def annulla_container(nome_container: str) -> bool:
         return False
 
 
-STATI_DOCKER_ATTIVI = (StatoLotto.preprocessing, StatoLotto.elaborazione_ocr, StatoLotto.analisi_difformita)
+# Tutti gli stati tranne quelli conclusi: un secondo lotto NON puo' iniziare
+# finche' il primo non arriva a completato/archiviato/eccezione — non solo
+# mentre un container e' realmente in esecuzione. Include anche le fasi di
+# revisione manuale (nessun container attivo, ma i JSON di OCR/difformita'
+# di QUESTO lotto restano nella cartella condivisa ./dati/output finche' la
+# fase Excel finale non li consuma: un secondo lotto che avviasse il
+# preprocessing in quella finestra la svuoterebbe, perdendo quei JSON in
+# silenzio — vedi il commento in cima al modulo).
+STATI_LOTTO_OCCUPATO = (
+    StatoLotto.bozza, StatoLotto.caricamento, StatoLotto.preprocessing,
+    StatoLotto.revisione_barcode, StatoLotto.elaborazione_ocr,
+    StatoLotto.revisione_qualita, StatoLotto.analisi_difformita,
+    StatoLotto.revisione_difformita,
+)
 
 
-def lotto_in_esecuzione(db: Session):
-    """Il lotto (se presente) con un container Docker attualmente in esecuzione — solo
-    uno alla volta puo' averlo (tutti condividono la cartella ./dati, vedi cima del modulo).
-    Usato sia per bloccare l'avvio di un nuovo lotto sia per dire QUALE lotto e' occupato."""
-    return db.query(LottoMensile).filter(LottoMensile.stato.in_(STATI_DOCKER_ATTIVI)).first()
+def lotto_in_esecuzione(db: Session, escludi_lotto_id=None):
+    """
+    Il lotto (se presente) che occupa attualmente "lo slot" — dalla creazione
+    fino a completato/archiviato/eccezione, non solo mentre un container Docker e'
+    realmente in esecuzione (vedi STATI_LOTTO_OCCUPATO). Usato sia per bloccare
+    l'avvio di un nuovo lotto sia per dire QUALE lotto e' occupato.
+
+    escludi_lotto_id: il lotto che sta chiedendo "posso partire?" deve
+    escludere se stesso dalla ricerca — a quel punto e' gia' stato creato
+    con uno stato "occupato" (caricamento), quindi senza questo la query
+    troverebbe SE STESSO e si bloccherebbe da solo, sempre, anche a
+    database vuoto (bug reale, gia' capitato).
+    """
+    query = db.query(LottoMensile).filter(LottoMensile.stato.in_(STATI_LOTTO_OCCUPATO))
+    if escludi_lotto_id is not None:
+        query = query.filter(LottoMensile.id != escludi_lotto_id)
+    return query.first()
 
 
-def esiste_lotto_in_esecuzione(db: Session) -> bool:
-    return lotto_in_esecuzione(db) is not None
+def esiste_lotto_in_esecuzione(db: Session, escludi_lotto_id=None) -> bool:
+    return lotto_in_esecuzione(db, escludi_lotto_id) is not None
 
 
 def _pulisci_cartella_dati():
@@ -371,15 +422,45 @@ def _parse_data_italiana(valore):
     garantito al 100% (date_corrector.py esiste apposta per
     normalizzarle) — provo i formati piu' comuni, altrimenti lascio
     vuoto invece di far fallire l'intero import.
+
+    data_etichetta_preparazione e etichetta_data_scadenza in particolare
+    arrivano da date_corrector.py con un prompt che chiede l'anno a 4
+    cifre, ma il modello a volte lo scrive comunque a 2 cifre (es.
+    "04/12/25" invece di "04/12/2025") — senza i formati %y qui sotto
+    quel valore falliva silenziosamente tutti e 3 i tentativi e veniva
+    scartato (None), anche se l'OCR aveva letto la data correttamente.
     """
     if not valore or not isinstance(valore, str):
         return None
     valore = valore.strip()
-    for formato in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d"):
+    for formato in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d/%m/%y", "%d-%m-%y"):
         try:
             return datetime.strptime(valore, formato).date()
         except ValueError:
             continue
+    return None
+
+
+def _parse_booleano(valore):
+    """
+    timbro_medico/firma_medico dovrebbero arrivare dal JSON dell'OCR come
+    bool nativi (true/false), ma il modello a volte li scrive come stringa
+    ("false", "False"...) — usare bool(valore) direttamente e' un bug
+    subdolo perche' bool("false") vale True in Python (qualunque stringa
+    non vuota e' truthy). Qui il valore finale rispetta sempre il dato
+    booleano vero letto dal JSON, non la sua "truthiness" come stringa.
+    """
+    if isinstance(valore, bool):
+        return valore
+    if valore in (None, ""):
+        return None
+    if isinstance(valore, (int, float)):
+        return bool(valore)
+    testo = str(valore).strip().lower()
+    if testo in ("true", "1", "vero", "si", "sì", "yes"):
+        return True
+    if testo in ("false", "0", "falso", "no"):
+        return False
     return None
 
 
@@ -402,7 +483,7 @@ def _normalizza_dati_ocr(dati_grezzi: dict) -> dict:
         if chiave in CAMPI_DATA:
             normalizzato[chiave] = _parse_data_italiana(valore)
         elif chiave in CAMPI_BOOLEANI:
-            normalizzato[chiave] = bool(valore) if valore != "" else None
+            normalizzato[chiave] = _parse_booleano(valore)
         elif chiave in CAMPI_PREZZO:
             normalizzato[chiave] = _parse_prezzo(valore)
         else:
@@ -475,12 +556,17 @@ def _pubblica_prescrizioni_su_sharepoint(lotto: LottoMensile) -> int:
 
 def avvia_preprocessing_reale(lotto_id) -> None:
     db: Session = SessionLocal()
+    elaborazione = None  # puo' non esistere ancora se si esce prima di crearla (vedi except sotto)
     try:
         lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
         if lotto is None:
             return
-        if esiste_lotto_in_esecuzione(db):
-            raise LottoGiaInEsecuzione()
+        if esiste_lotto_in_esecuzione(db, escludi_lotto_id=lotto.id):
+            raise LottoGiaInEsecuzione(
+                "Un altro lotto e' ancora in lavorazione (nemmeno terminato un container "
+                "puo' bastare: le fasi di revisione manuale occupano lo stesso slot, vedi "
+                "STATI_LOTTO_OCCUPATO) — completalo prima di poter avviare questo."
+            )
 
         elaborazione = Elaborazione(
             lotto_id=lotto.id, fase=FaseElaborazione.preprocessing,
@@ -547,8 +633,9 @@ def avvia_preprocessing_reale(lotto_id) -> None:
     except Exception as exc:
         log.exception("Errore in avvia_preprocessing_reale")
         db.rollback()
-        elaborazione.stato = StatoElaborazione.errore
-        elaborazione.finished_at = datetime.utcnow()
+        if elaborazione is not None:
+            elaborazione.stato = StatoElaborazione.errore
+            elaborazione.finished_at = datetime.utcnow()
         lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
         if lotto:
             lotto.stato = StatoLotto.eccezione
@@ -599,6 +686,7 @@ def correggi_barcode_reale(prescrizione_id, nuovo_barcode: str) -> None:
 
 def avvia_ocr_reale(lotto_id) -> None:
     db: Session = SessionLocal()
+    elaborazione = None  # puo' non esistere ancora se si esce prima di crearla (vedi except sotto)
     try:
         lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
         if lotto is None:
@@ -640,10 +728,18 @@ def avvia_ocr_reale(lotto_id) -> None:
                 **campi_normalizzati,
             ))
 
-            presc.n_campi_compilati = sum(1 for v in campi_normalizzati.values() if v not in (None, ""))
-            presc.n_campi_totali = len(COLONNE_DATI_OCR)
-            # score_ocr non calcolato dalla pipeline reale (nessuna metrica di
-            # confidenza numerica prodotta) — resta vuoto finche' non ce n'e' una.
+            # Score OCR = percentuale di campi compilati sui 22 che dipendono
+            # davvero dalla lettura OCR (esclusi i 2 presi dall'Excel Regione,
+            # vedi CAMPI_SCORE_OCR sopra). "Campi compilati" usa la stessa
+            # base 22, cosi' le due colonne mostrate in lotto_detail.html
+            # restano coerenti tra loro.
+            n_compilati = sum(
+                1 for chiave in CAMPI_SCORE_OCR
+                if campi_normalizzati.get(chiave) not in (None, "")
+            )
+            presc.n_campi_compilati = n_compilati
+            presc.n_campi_totali = len(CAMPI_SCORE_OCR)
+            presc.score_ocr = round(100 * n_compilati / len(CAMPI_SCORE_OCR), 2)
             match_regione = str(dati_grezzi.get("CONTROLLO_CODICE_PRESCRIZIONE", "")).lower() == "true" \
                 or bool(dati_grezzi.get("LORDO_PRESC"))
             presc.barcode_in_excel = match_regione
@@ -654,6 +750,8 @@ def avvia_ocr_reale(lotto_id) -> None:
         db.commit()
 
         lotto.n_match_excel = n_match
+        scores = [float(p.score_ocr) for p in lotto.prescrizioni if p.score_ocr is not None]
+        lotto.score_ocr_medio = round(sum(scores) / len(scores), 2) if scores else None
         lotto.updated_at = datetime.utcnow()
 
         elaborazione.stato = StatoElaborazione.completata
@@ -670,8 +768,9 @@ def avvia_ocr_reale(lotto_id) -> None:
     except Exception as exc:
         log.exception("Errore in avvia_ocr_reale")
         db.rollback()
-        elaborazione.stato = StatoElaborazione.errore
-        elaborazione.finished_at = datetime.utcnow()
+        if elaborazione is not None:
+            elaborazione.stato = StatoElaborazione.errore
+            elaborazione.finished_at = datetime.utcnow()
         lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
         if lotto:
             lotto.stato = StatoLotto.eccezione
@@ -681,8 +780,126 @@ def avvia_ocr_reale(lotto_id) -> None:
         db.close()
 
 
+def _valori_uguali(a, b) -> bool:
+    """
+    Confronto tollerante ai tipi: i valori numerici (es. Decimal dalla
+    colonna Numeric del DB vs float da _parse_prezzo) possono differire
+    per la sola rappresentazione binaria pur essendo lo stesso numero
+    (es. Decimal('82.20') == 82.2 vale False in Python) — qui si
+    arrotondano entrambi a 2 decimali prima di confrontare. Per tutto
+    il resto (date, booleani, stringhe, None) e' un confronto normale.
+    """
+    try:
+        return round(float(a), 2) == round(float(b), 2)
+    except (TypeError, ValueError):
+        return a == b
+
+
+def _applica_correzioni_ocr_su_json(lotto: LottoMensile) -> int:
+    """
+    Riporta sui file JSON grezzi ancora su ./dati/output/ (quelli che
+    leggono sia fase3-difformita sia fase4-excel) le correzioni manuali
+    fatte dall'operatore in "Revisione qualita' OCR"
+    (POST /lotti/{id}/prescrizioni/{id}/ocr, salvate finora solo in
+    dati_ocr.json_corretto) — senza questo passaggio la correzione non
+    aveva alcun effetto a valle: l'analisi difformita' e l'Excel finale
+    leggevano comunque il valore OCR originale, mai quello corretto.
+
+    Chiamata prima di entrambi i container (fase3 e fase4): un secondo
+    passaggio e' innocuo (idempotente) e copre eventuali correzioni
+    fatte tra le due fasi.
+    """
+    n = 0
+    for presc in lotto.prescrizioni:
+        dati_ocr = presc.dati_ocr
+        if not dati_ocr or not dati_ocr.json_corretto or not presc.barcode:
+            continue
+        json_path = OUTPUT_DIR / f"{presc.barcode}.json"
+        if not json_path.is_file():
+            continue
+        try:
+            dati_grezzi = json.loads(json_path.read_text(encoding="utf-8-sig"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        for campo, valore in dati_ocr.json_corretto.items():
+            chiave_raw = MAPPA_CAMPI_OCR_INVERSA.get(campo, campo)
+            dati_grezzi[chiave_raw] = valore
+        json_path.write_text(json.dumps(dati_grezzi, ensure_ascii=False, indent=2), encoding="utf-8")
+        n += 1
+    return n
+
+
+def _evidenzia_campi_corretti(destinazione: Path, lotto: LottoMensile) -> None:
+    """
+    Evidenzia in giallo, nell'Excel finale, le celle dei campi OCR che
+    l'operatore ha aggiunto o modificato manualmente in "Revisione
+    qualita' OCR" rispetto al valore letto originariamente dal modello
+    (json_vllm_raw) — confronto sul valore GIA' NORMALIZZATO (stessa
+    logica di _normalizza_dati_ocr, tramite _parse_data_italiana/
+    _parse_booleano/_parse_prezzo) per non confondere una semplice
+    differenza di formato con una correzione vera.
+    """
+    try:
+        wb = openpyxl.load_workbook(destinazione)
+        ws = wb.active
+        intestazione = {}
+        for col_idx in range(1, ws.max_column + 1):
+            nome = ws.cell(row=1, column=col_idx).value
+            if nome:
+                intestazione[nome] = col_idx
+        col_barcode = intestazione.get("BARCODE")
+        if not col_barcode:
+            return
+
+        riga_per_barcode = {}
+        for riga in range(2, ws.max_row + 1):
+            valore = ws.cell(row=riga, column=col_barcode).value
+            if valore:
+                riga_per_barcode[re.sub(r"[^0-9A-Za-z]", "", str(valore))] = riga
+
+        sfondo_corretto = PatternFill(fgColor="FFFFF3B0", fill_type="solid")
+
+        evidenziate = 0
+        for presc in lotto.prescrizioni:
+            dati_ocr = presc.dati_ocr
+            if not dati_ocr or not dati_ocr.corretto_at or not presc.barcode:
+                continue
+            raw = dati_ocr.json_vllm_raw or {}
+            riga = riga_per_barcode.get(re.sub(r"[^0-9A-Za-z]", "", presc.barcode))
+            if not riga:
+                continue
+            for campo in CAMPI_SCORE_OCR:
+                chiave_raw = MAPPA_CAMPI_OCR_INVERSA.get(campo, campo)
+                valore_raw_grezzo = raw.get(chiave_raw)
+                if campo in CAMPI_DATA:
+                    valore_raw_normalizzato = _parse_data_italiana(valore_raw_grezzo)
+                elif campo in CAMPI_BOOLEANI:
+                    valore_raw_normalizzato = _parse_booleano(valore_raw_grezzo)
+                elif campo in CAMPI_PREZZO:
+                    valore_raw_normalizzato = _parse_prezzo(valore_raw_grezzo)
+                else:
+                    valore_raw_normalizzato = valore_raw_grezzo or None
+
+                valore_attuale = getattr(dati_ocr, campo)
+                if _valori_uguali(valore_attuale, valore_raw_normalizzato):
+                    continue
+
+                col_excel = "etichetta_THC" if campo == "etichetta_thc" else campo
+                col_idx = intestazione.get(col_excel)
+                if not col_idx:
+                    continue
+                ws.cell(row=riga, column=col_idx).fill = sfondo_corretto
+                evidenziate += 1
+        if evidenziate:
+            wb.save(destinazione)
+            log.info(f"Evidenziati {evidenziate} campi corretti manualmente nell'Excel finale")
+    except Exception:
+        log.exception("Impossibile evidenziare i campi corretti manualmente nell'Excel finale (il file resta comunque salvato)")
+
+
 def avvia_difformita_reale(lotto_id) -> None:
     db: Session = SessionLocal()
+    elaborazione = None  # puo' non esistere ancora se si esce prima di crearla (vedi except sotto)
     try:
         lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
         if lotto is None:
@@ -699,6 +916,9 @@ def avvia_difformita_reale(lotto_id) -> None:
         db.commit()
 
         _scrivi_farmacie_per_pipeline(db)
+        n_corretti = _applica_correzioni_ocr_su_json(lotto)
+        if n_corretti:
+            log_elaborazione(db, elaborazione, f"Applicate {n_corretti} correzioni OCR manuali ai dati prima dell'analisi")
         log_elaborazione(db, elaborazione, "Avvio container fase3-difformita")
         _esegui_container("fase3-difformita", db, elaborazione)
 
@@ -750,8 +970,9 @@ def avvia_difformita_reale(lotto_id) -> None:
     except Exception as exc:
         log.exception("Errore in avvia_difformita_reale")
         db.rollback()
-        elaborazione.stato = StatoElaborazione.errore
-        elaborazione.finished_at = datetime.utcnow()
+        if elaborazione is not None:
+            elaborazione.stato = StatoElaborazione.errore
+            elaborazione.finished_at = datetime.utcnow()
         lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
         if lotto:
             lotto.stato = StatoLotto.eccezione
@@ -810,6 +1031,109 @@ def _correggi_link_pdf_excel(destinazione: Path, lotto: LottoMensile) -> None:
         log.exception("Impossibile correggere i link PDF nell'Excel finale (il file resta comunque salvato)")
 
 
+def _evidenzia_difformita_escluse(destinazione: Path, db: Session, lotto: LottoMensile) -> None:
+    """
+    L'Excel finale viene scritto da phase4_excel.py leggendo i JSON
+    prodotti in fase 3 (analisi difformita') — quei JSON non sanno nulla
+    delle esclusioni che l'operatore fa DOPO, durante la revisione
+    (POST /lotti/{id}/difformita/{id}/escludi, che tocca solo il
+    database). Qui, dopo che l'Excel e' stato scritto, si riscrivono le
+    celle delle difformita' che risultano escluse nel database: testo
+    "{descrizione}-esclusa" ed evidenziate in rosso, cosi' chi legge il
+    file vede subito quali difformita' l'operatore ha deciso di non
+    considerare valide.
+
+    Copre solo le esclusioni fatte PRIMA di "Completa" (il caso normale:
+    la revisione difformita' avviene prima, nel flusso del wizard). Un'
+    esclusione fatta su un lotto gia' completato non aggiorna un Excel
+    gia' scritto — gap noto, da coprire in futuro con un modo per
+    rigenerare l'output.
+    """
+    escluse = (
+        db.query(Difformita)
+        .join(Prescrizione)
+        .filter(Prescrizione.lotto_id == lotto.id, Difformita.stato == StatoDifformita.esclusa)
+        .all()
+    )
+    if not escluse:
+        return
+    try:
+        wb = openpyxl.load_workbook(destinazione)
+        ws = wb.active
+        intestazione = {}
+        for col_idx in range(1, ws.max_column + 1):
+            nome = ws.cell(row=1, column=col_idx).value
+            if nome:
+                intestazione[nome] = col_idx
+        col_barcode = intestazione.get("BARCODE")
+        if not col_barcode:
+            return
+
+        riga_per_barcode = {}
+        for riga in range(2, ws.max_row + 1):
+            valore = ws.cell(row=riga, column=col_barcode).value
+            if valore:
+                riga_per_barcode[re.sub(r"[^0-9A-Za-z]", "", str(valore))] = riga
+
+        font_esclusa = Font(color="FFCC0000", bold=True)
+        sfondo_esclusa = PatternFill(fgColor="FFFCE4E4", fill_type="solid")
+
+        evidenziate = 0
+        for d in escluse:
+            barcode_norm = re.sub(r"[^0-9A-Za-z]", "", (d.prescrizione.barcode or ""))
+            riga = riga_per_barcode.get(barcode_norm)
+            col_idx = intestazione.get(f"R{d.codice}")
+            if not riga or not col_idx:
+                continue  # barcode non presente in questo Excel, o codice senza colonna nel template (es. 17, 19M)
+            cella = ws.cell(row=riga, column=col_idx)
+            testo_base = str(cella.value or d.descrizione or "").strip()
+            if not testo_base.endswith("-esclusa"):
+                cella.value = f"{testo_base}-esclusa" if testo_base else "esclusa"
+            cella.font = font_esclusa
+            cella.fill = sfondo_esclusa
+            evidenziate += 1
+        wb.save(destinazione)
+        log.info(f"Evidenziate {evidenziate} difformita' escluse nell'Excel finale")
+    except Exception:
+        log.exception("Impossibile evidenziare le difformita' escluse nell'Excel finale (il file resta comunque salvato)")
+
+
+def _pubblica_cfa_su_sharepoint(db: Session, lotto: LottoMensile) -> int:
+    """
+    Al completamento del lotto, copia in una cartella "CFA" dentro la
+    cartella del lotto (Macchina Locale/Archivio/{anno}/{mese}/{lotto}/CFA)
+    tutte le ricette che hanno almeno una difformita' CONFERMATA — senza
+    distinzione di farmacia (a differenza dello ZIP di export, che le
+    raggruppa per farmacia): qui e' un unico raccoglitore piatto, pensato
+    per chi deve rivedere solo le ricette con difformita' confermate di
+    questo lotto, indipendentemente da quale farmacia le ha spedite.
+    """
+    if not lotto.sp_lavoro_path:
+        return 0
+    prescrizioni_con_confermate = (
+        db.query(Prescrizione)
+        .join(Difformita)
+        .filter(Prescrizione.lotto_id == lotto.id, Difformita.stato == StatoDifformita.confermata)
+        .distinct()
+        .all()
+    )
+    if not prescrizioni_con_confermate:
+        return 0
+    cartella_cfa = radice_sharepoint() / lotto.sp_lavoro_path / "CFA"
+    cartella_cfa.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for presc in prescrizioni_con_confermate:
+        percorso_pdf = percorso_pdf_prescrizione(presc)
+        if not percorso_pdf:
+            continue
+        origine = Path(percorso_pdf)
+        if not origine.is_file():
+            continue
+        shutil.copy2(origine, cartella_cfa / origine.name)
+        n += 1
+    return n
+
+
 def scrivi_excel_finale_reale(lotto_id) -> bool:
     """
     Chiamata sincrona (non e' un BackgroundTask separato) dalla route
@@ -819,6 +1143,7 @@ def scrivi_excel_finale_reale(lotto_id) -> bool:
     va storto, cosi' la route puo' decidere se bloccare il completamento.
     """
     db: Session = SessionLocal()
+    elaborazione = None  # puo' non esistere ancora se si esce prima di crearla (vedi except sotto)
     try:
         lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
         if lotto is None:
@@ -833,6 +1158,9 @@ def scrivi_excel_finale_reale(lotto_id) -> bool:
         db.add(elaborazione)
         db.commit()
 
+        n_corretti = _applica_correzioni_ocr_su_json(lotto)
+        if n_corretti:
+            log_elaborazione(db, elaborazione, f"Applicate {n_corretti} correzioni OCR manuali ai dati prima della scrittura Excel")
         log_elaborazione(db, elaborazione, "Avvio container fase4-excel")
         _esegui_container("fase4-excel", db, elaborazione)
 
@@ -851,7 +1179,10 @@ def scrivi_excel_finale_reale(lotto_id) -> bool:
         destinazione = cartella_output_permanente / nome_file_output
         shutil.copy2(file_excel_finale, destinazione)
         _correggi_link_pdf_excel(destinazione, lotto)
+        _evidenzia_difformita_escluse(destinazione, db, lotto)
+        _evidenzia_campi_corretti(destinazione, lotto)
         pubblica_file(lotto.id, destinazione)
+        n_cfa = _pubblica_cfa_su_sharepoint(db, lotto)
 
         lotto.excel_output_filename = nome_file_output
 
@@ -861,6 +1192,8 @@ def scrivi_excel_finale_reale(lotto_id) -> bool:
         db.commit()
 
         log_elaborazione(db, elaborazione, f"Excel finale scritto: {destinazione}")
+        if n_cfa:
+            log_elaborazione(db, elaborazione, f"{n_cfa} ricette con difformita' confermate pubblicate in CFA")
         return True
 
     except ElaborazioneAnnullata:
@@ -869,10 +1202,17 @@ def scrivi_excel_finale_reale(lotto_id) -> bool:
     except Exception as exc:
         log.exception("Errore in scrivi_excel_finale_reale")
         db.rollback()
-        elaborazione.stato = StatoElaborazione.errore
-        elaborazione.finished_at = datetime.utcnow()
+        if elaborazione is not None:
+            elaborazione.stato = StatoElaborazione.errore
+            elaborazione.finished_at = datetime.utcnow()
         lotto = db.query(LottoMensile).filter(LottoMensile.id == lotto_id).first()
         if lotto:
+            # Come le altre 3 fasi: porta il lotto in eccezione invece di
+            # lasciarlo a revisione_difformita senza nessun bottone
+            # utilizzabile ("Riprova"/"Elimina" compaiono solo su
+            # eccezione, il pannello "Annulla" solo su elaborazione
+            # in_corso — nessuno dei due era piu' vero a questo punto).
+            lotto.stato = StatoLotto.eccezione
             lotto.note = ((lotto.note or "") + f"\n[{datetime.utcnow():%d/%m %H:%M}] Scrittura Excel: {exc}").strip()
         db.commit()
         return False

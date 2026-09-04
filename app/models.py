@@ -310,6 +310,11 @@ class StatoRevisionePrescrizione(str, enum.Enum):
     corretto = "corretto"
 
 
+class DecisioneEtichettaMancante(str, enum.Enum):
+    confermata = "confermata"  # operatore: l'etichetta manca davvero
+    esclusa = "esclusa"        # operatore: falso allarme, l'etichetta e' presente
+
+
 class Prescrizione(Base):
     __tablename__ = "prescrizioni"
 
@@ -331,7 +336,7 @@ class Prescrizione(Base):
     # Qualita' OCR
     score_ocr = Column(Numeric(5, 2), nullable=True)
     n_campi_compilati = Column(Integer, nullable=True)
-    n_campi_totali = Column(Integer, default=24)
+    n_campi_totali = Column(Integer, default=22)
 
     # Stato revisione
     stato_revisione = Column(Enum(StatoRevisionePrescrizione), default=StatoRevisionePrescrizione.non_rivisto, nullable=False)
@@ -342,6 +347,13 @@ class Prescrizione(Base):
     # Match con Excel regione
     barcode_in_excel = Column(Boolean, nullable=True)
     riga_excel = Column(Integer, nullable=True)
+
+    # Segnalazione "etichetta mancante" in revisione difformita' (vedi
+    # gestisci_etichetta_mancante in lotti.py): None finche' l'operatore
+    # non si e' espresso sulla segnalazione automatica (basata sulla
+    # presenza congiunta delle difformita' 11+12+13+16, stessa logica di
+    # phase4_excel.py:COLONNA_ETICHETTA_MANCANTE), poi la sua decisione.
+    decisione_etichetta_mancante = Column(Enum(DecisioneEtichettaMancante), nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
