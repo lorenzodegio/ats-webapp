@@ -149,45 +149,6 @@ def _valida(codice: str, nome: str, provincia: str):
     return {"codice": codice, "nome": nome, "provincia": provincia or None}, None
 
 
-@router.post("/impostazioni/farmacie")
-def crea_farmacia(
-    codice: str = Form(""),
-    nome: str = Form(""),
-    codice_regionale: str = Form(""),
-    indirizzo: str = Form(""),
-    comune: str = Form(""),
-    provincia: str = Form(""),
-    telefono: str = Form(""),
-    email: str = Form(""),
-    note: str = Form(""),
-    db: Session = Depends(get_db),
-    utente: Utente = Depends(get_utente_corrente),
-):
-    blocco = _richiede_admin(utente)
-    if blocco:
-        return blocco
-    puliti, errore = _valida(codice, nome, provincia)
-    if errore:
-        return RedirectResponse(url=f"/impostazioni?errore={errore}", status_code=302)
-    if db.query(Farmacia).filter(Farmacia.codice == puliti["codice"]).first():
-        return RedirectResponse(url="/impostazioni?errore=Codice+gia+in+uso", status_code=302)
-
-    db.add(Farmacia(
-        codice=puliti["codice"],
-        nome=puliti["nome"],
-        codice_regionale=(codice_regionale or "").strip() or None,
-        indirizzo=(indirizzo or "").strip() or None,
-        comune=(comune or "").strip() or None,
-        provincia=puliti["provincia"],
-        telefono=(telefono or "").strip() or None,
-        email=(email or "").strip() or None,
-        note=(note or "").strip() or None,
-        attiva=True,
-    ))
-    db.commit()
-    return RedirectResponse(url="/impostazioni?ok=creata", status_code=302)
-
-
 @router.post("/impostazioni/farmacie/{farmacia_id}/modifica")
 def salva_farmacia(
     farmacia_id: str,
@@ -272,22 +233,6 @@ def riattiva_farmacia(
         farmacia.updated_at = datetime.utcnow()
         db.commit()
     return RedirectResponse(url="/impostazioni?ok=riattivata", status_code=302)
-
-
-@router.post("/impostazioni/farmacie/{farmacia_id}/elimina")
-def elimina_farmacia(
-    farmacia_id: str,
-    db: Session = Depends(get_db),
-    utente: Utente = Depends(get_utente_corrente),
-):
-    blocco = _richiede_admin(utente)
-    if blocco:
-        return blocco
-    farmacia = db.query(Farmacia).filter(Farmacia.id == farmacia_id).first()
-    if farmacia:
-        db.delete(farmacia)
-        db.commit()
-    return RedirectResponse(url="/impostazioni?ok=eliminata", status_code=302)
 
 
 @router.get("/impostazioni/farmacie/export-csv")

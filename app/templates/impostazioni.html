@@ -5,7 +5,7 @@
 <div class="main__header">
   <div>
     <h1>Impostazioni</h1>
-    <div class="sottotitolo">Censimento farmacie convenzionate e parametri di sistema (solo amministratore)</div>
+    <div class="sottotitolo">Anagrafica farmacie convenzionate e parametri di sistema (solo amministratore)</div>
   </div>
 </div>
 
@@ -22,11 +22,10 @@
 </div>
 
 {% if tab == 'farmacie' %}
+{% if farmacia_in_modifica %}
 <div class="card">
-  <h2 class="card__titolo">
-    {% if farmacia_in_modifica %}Modifica farmacia {{ farmacia_in_modifica.codice }}{% else %}Nuova farmacia{% endif %}
-  </h2>
-  <form method="post" action="{% if farmacia_in_modifica %}/impostazioni/farmacie/{{ farmacia_in_modifica.id }}/modifica{% else %}/impostazioni/farmacie{% endif %}">
+  <h2 class="card__titolo">Modifica farmacia {{ farmacia_in_modifica.codice }}</h2>
+  <form method="post" action="/impostazioni/farmacie/{{ farmacia_in_modifica.id }}/modifica">
     <div class="griglia-form">
       <div class="campo">
         <label for="codice">Codice interno *</label>
@@ -65,26 +64,23 @@
       <label for="note">Note operative</label>
       <textarea id="note" name="note" rows="2">{{ form_farmacia.note }}</textarea>
     </div>
-    {% if farmacia_in_modifica %}
     <div class="campo">
       <label>
         <input type="checkbox" name="attiva" value="1" {% if form_farmacia.attiva %}checked{% endif %}>
         Farmacia attiva (inclusa nel dizionario OCR e nell'export ZIP)
       </label>
     </div>
-    {% endif %}
     <div class="filtri-riga">
-      <button type="submit" class="btn btn--primario">{% if farmacia_in_modifica %}Salva modifiche{% else %}Aggiungi farmacia{% endif %}</button>
-      {% if farmacia_in_modifica %}
+      <button type="submit" class="btn btn--primario">Salva modifiche</button>
       <a href="/impostazioni" class="btn btn--secondario">Annulla</a>
-      {% endif %}
     </div>
   </form>
 </div>
+{% endif %}
 
 <div class="card">
   <div class="card__titolo" style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
-    <span>Elenco farmacie <span class="card__titolo-contatore">({{ farmacie | length }})</span></span>
+    <span>Anagrafica Farmacie <span class="card__titolo-contatore">({{ farmacie | length }})</span></span>
     <a href="/impostazioni/farmacie/export-csv" class="btn btn--secondario">Scarica CSV</a>
   </div>
   {% if farmacie %}
@@ -137,9 +133,6 @@
               <button type="submit" class="btn btn--primario" style="padding:6px 10px; font-size:12px;">Riattiva</button>
             </form>
             {% endif %}
-            <form method="post" action="/impostazioni/farmacie/{{ f.id }}/elimina" onsubmit="return confirm('Eliminare definitivamente {{ f.nome }}? Preferisci disattivarla se e\' ancora in uso.');">
-              <button type="submit" class="btn btn--pericolo" style="padding:6px 10px; font-size:12px;">Elimina</button>
-            </form>
           </div>
         </td>
       </tr>
@@ -147,7 +140,7 @@
     </tbody>
   </table>
   {% else %}
-  <div class="stato-vuoto">Nessuna farmacia censita. Aggiungine una dal form sopra: l'elenco viene iniettato nel prompt OCR e usato per il matching fuzzy.</div>
+  <div class="stato-vuoto">Nessuna farmacia in anagrafica. L'elenco viene iniettato nel prompt OCR e usato per il matching fuzzy.</div>
   {% endif %}
 </div>
 {% endif %}
