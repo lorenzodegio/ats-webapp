@@ -211,7 +211,6 @@ a { color: inherit; text-decoration: none; }
 .main {
   flex: 1;
   padding: 32px 40px;
-  max-width: 1200px;
 }
 
 .main__header {
@@ -242,7 +241,11 @@ a { color: inherit; text-decoration: none; }
   padding: 24px;
 }
 
-.card + .card { margin-top: 20px; }
+/* Fratello generico (~), non solo adiacente (+): tra due card puo'
+   capitare un elemento non-card in mezzo (es. un modal con
+   display:none) che romperebbe la spaziatura con un selettore solo
+   adiacente, pur restando invisibile. */
+.card ~ .card { margin-top: 20px; }
 
 .card__titolo {
   font-size: 15px;
@@ -451,6 +454,45 @@ table.tabella tr:last-child td { border-bottom: none; }
 .btn--primario { background: var(--sage); color: #FFFFFF; }
 .btn--secondario { background: #FFFFFF; color: var(--forest); border: 1px solid var(--border-color); }
 .btn--pericolo { background: var(--terracotta); color: #FFFFFF; }
+
+/* Toggle Vero/Falso per campi booleani OCR (firma medico, timbro medico):
+   radio nascosto (accessibile da tastiera) + label stilizzata come
+   pulsante, cosi' lo stato e' sempre esplicito — niente ambiguita' tra
+   "falso" e "non ancora verificato" come con una checkbox vuota. */
+.toggle-vero-falso {
+  position: relative;
+  display: inline-flex;
+  gap: 8px;
+}
+.toggle-vero-falso input[type="radio"] {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+.toggle-vero-falso label {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 16px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border-color);
+  background: #FFFFFF;
+  color: var(--forest);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.toggle-vero-falso input[type="radio"]:checked + label {
+  background: var(--sage);
+  border-color: var(--sage);
+  color: #FFFFFF;
+}
+.toggle-vero-falso input[type="radio"]:focus-visible + label {
+  outline: 2px solid var(--sage);
+  outline-offset: 2px;
+}
 
 .errore-form {
   background: rgba(201, 137, 91, 0.12);
@@ -865,7 +907,11 @@ a.wizard-step--attivo .wizard-step__numero {
 }
 
 /* ---------- Gruppo lotto (archivio raggruppato) ---------- */
-.gruppo-lotto { padding: 0; overflow: hidden; }
+/* margin-bottom esplicito: ".card + .card" da solo non basta perche'
+   l'elemento successivo (es. .kpi-grid nella pagina lotto) spesso non ha
+   la classe .card, quindi quella regola non scatta e lo spazio sotto
+   sparisce rispetto a tutte le altre card. */
+.gruppo-lotto { padding: 0; overflow: hidden; margin-bottom: 20px; }
 
 .gruppo-lotto__intestazione {
   display: flex;

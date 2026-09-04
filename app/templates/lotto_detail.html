@@ -40,13 +40,13 @@
   <div class="pannello-avanzamento__testa">
     <h2 class="card__titolo" style="margin-bottom:0;">Elaborazione in corso</h2>
     <div class="controlli-elaborazione" id="controlli-elaborazione">
-      <form method="post" action="/lotti/{{ lotto.id }}/elaborazione/pausa" id="form-pausa" style="display:{{ 'none' if in_pausa else 'inline' }};">
+      <form method="post" action="/lotti/{{ lotto.id }}/elaborazione/pausa" id="form-pausa" style="display:{{ 'none' if (in_pausa or annullamento_in_corso) else 'inline' }};">
         <button type="submit" class="btn btn--secondario">Metti in pausa</button>
       </form>
-      <form method="post" action="/lotti/{{ lotto.id }}/elaborazione/riprendi" id="form-riprendi" style="display:{{ 'inline' if in_pausa else 'none' }};">
+      <form method="post" action="/lotti/{{ lotto.id }}/elaborazione/riprendi" id="form-riprendi" style="display:{{ 'inline' if (in_pausa and not annullamento_in_corso) else 'none' }};">
         <button type="submit" class="btn btn--primario">Riprendi</button>
       </form>
-      <form method="post" action="/lotti/{{ lotto.id }}/elaborazione/annulla" onsubmit="return confirm('Annullare questa elaborazione? Il lotto restera\' fermo allo stato attuale e andra\' segnalato come eccezione.');">
+      <form method="post" action="/lotti/{{ lotto.id }}/elaborazione/annulla" id="form-annulla-elaborazione">
         <button type="submit" class="btn btn--pericolo">Annulla</button>
       </form>
     </div>
@@ -191,11 +191,22 @@
   <p style="font-size:13px; color: var(--text-secondary); margin-top:-8px;">
     Clicca un barcode per vedere il PDF e i campi riconosciuti, modificarli e tornare all'elenco.
   </p>
-  <table class="tabella">
+  {% if lotto.stato.value != 'elaborazione_ocr' %}
+  <div class="filtri-riga" style="margin-bottom:16px;">
+    <label for="filtro-score-ocr" style="font-size:13px; color:var(--text-secondary);">Mostra solo score OCR sotto:</label>
+    <input type="number" id="filtro-score-ocr" min="0" max="100" step="1" placeholder="es. 80"
+           oninput="filtraScoreOcr(this.value)"
+           style="width:80px; padding:6px 10px; border:1px solid var(--border-color); border-radius:8px; font-family:var(--font-ui); font-size:13px;">
+    <span style="font-size:13px; color:var(--text-secondary);">%</span>
+    <button type="button" class="btn btn--secondario" style="padding:6px 10px; font-size:12px;"
+            onclick="document.getElementById('filtro-score-ocr').value=''; filtraScoreOcr('');">Azzera</button>
+  </div>
+  {% endif %}
+  <table class="tabella" id="tabella-qualita">
     <thead><tr><th>Barcode</th><th>Farmacia</th><th>Score OCR</th><th>Campi compilati</th><th>Match Excel</th></tr></thead>
     <tbody>
       {% for p in lotto.prescrizioni if p.stato_barcode.value != 'escluso' %}
-      <tr>
+      <tr data-score="{{ p.score_ocr if p.score_ocr is not none else '' }}">
         <td class="mono">
           {% if p.barcode %}
           <a href="/lotti/{{ lotto.id }}/prescrizioni/{{ p.id }}/revisione-ocr" class="link-barcode">{{ p.barcode }}</a>
@@ -225,6 +236,30 @@
 
 {# ---------------- Revisione difformita ---------------- #}
 {% if fase_wizard == 5 %}
+{% if prescrizioni_etichetta_mancante %}
+<div class="card" style="border-left: 4px solid var(--terracotta);">
+  <h2 class="card__titolo">⚠ Etichetta mancante rilevata</h2>
+  <p style="font-size:13px; color:var(--text-secondary); margin-top:-8px;">
+    Queste prescrizioni hanno tutte insieme le difformità 11, 12, 13 e 16 — tipico segno che manchi proprio l'etichetta. Conferma se manca davvero (esclude in blocco 11, 12, 13, 16, 19) oppure escludi la segnalazione se l'etichetta è presente (le difformità restano da gestire una per una).
+  </p>
+  <table class="tabella">
+    <thead><tr><th>Barcode</th><th>Azione</th></tr></thead>
+    <tbody>
+      {% for p in prescrizioni_etichetta_mancante %}
+      <tr>
+        <td class="mono">{{ p.barcode or '—' }}</td>
+        <td style="display:flex; gap:8px;">
+          <button type="button" class="btn btn--primario" style="padding:6px 10px; font-size:12px;"
+            onclick="apriModalEtichettaMancante('{{ lotto.id }}', '{{ p.id }}', 'conferma')">Conferma: etichetta assente</button>
+          <button type="button" class="btn btn--secondario" style="padding:6px 10px; font-size:12px;"
+            onclick="apriModalEtichettaMancante('{{ lotto.id }}', '{{ p.id }}', 'escludi')">Escludi: etichetta presente</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 <div class="card" id="revisione-difformita">
   <h2 class="card__titolo">Revisione difformità</h2>
   {% if difformita_da_gestire %}
@@ -266,6 +301,13 @@
         {% endfor %}
       </tbody>
     </table>
+  {% elif lotto.stato.value == 'analisi_difformita' %}
+    <div class="stato-vuoto">Analisi difformità in corso…</div>
+  {% elif lotto.stato.value in ['completato', 'archiviato'] %}
+    <div class="ok-form" style="margin-top:16px;">
+      Lotto già completato{% if lotto.completato_at %} il {{ lotto.completato_at|ora_locale }}{% endif %}.
+    </div>
+    <a href="/lotti/{{ lotto.id }}?fase=6" class="btn btn--secondario" style="margin-top:8px; display:inline-block;">Vai al riepilogo &rarr;</a>
   {% else %}
     <div class="stato-vuoto">Tutte le difformità sono state gestite.</div>
     <form method="post" action="/lotti/{{ lotto.id }}/completa" style="margin-top:16px;">
@@ -306,12 +348,17 @@
 {% endif %}
 {% endif %}
 
-{# ---------------- Prescrizioni e difformita: storico completo ---------------- #}
+{# ---------------- Prescrizioni e difformita: storico completo ----------------
+   Nascosta nello step 4 (OCR): la tabella "Revisione qualita OCR" sopra
+   mostra gia' le stesse prescrizioni con le stesse info essenziali —
+   resta visibile in tutte le altre fasi, dove e' l'unico posto da cui
+   aprire il modal "OCR" di modifica rapida. #}
+{% if fase_wizard != 4 %}
 <div class="card">
   <h2 class="card__titolo">Tutte le prescrizioni ({{ lotto.prescrizioni | length }})</h2>
   {% if lotto.prescrizioni %}
   <table class="tabella">
-    <thead><tr><th>Barcode</th><th>Farmacia</th><th>Stato barcode</th><th>Score OCR</th><th>Difformità</th><th>OCR</th></tr></thead>
+    <thead><tr><th>Barcode</th><th>Farmacia</th><th>Stato barcode</th><th>Score OCR</th><th>Difformità</th></tr></thead>
     <tbody>
       {% for p in lotto.prescrizioni %}
       <tr>
@@ -332,15 +379,6 @@
           {% endif %}
         </td>
         <td>{{ p.difformita | length }}</td>
-        <td>
-          {% if p.dati_ocr %}
-          <button class="btn btn--secondario" style="font-size:12px; padding:5px 10px;"
-            onclick="apriModalOcr('{{ lotto.id }}', '{{ p.id }}', '{{ p.barcode or "—" }}')"
-            title="Visualizza e correggi i dati OCR estratti">✏ OCR</button>
-          {% else %}
-          <span style="color:var(--text-secondary); font-size:12px;">—</span>
-          {% endif %}
-        </td>
       </tr>
       {% endfor %}
     </tbody>
@@ -349,6 +387,7 @@
   <div class="stato-vuoto">Preprocessing non ancora completato.</div>
   {% endif %}
 </div>
+{% endif %}
 
 {# ---------------- Modal confronto/correzione OCR ---------------- #}
 <div id="modal-ocr" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:1000; padding:20px; overflow-y:auto;">
@@ -377,6 +416,35 @@
   </div>
 </div>
 
+<div id="modal-conferma-annulla" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:1000; padding:20px; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:16px; max-width:440px; width:100%; padding:28px; box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <h2 style="margin:0 0 10px; font-size:17px;">Annullare questa elaborazione?</h2>
+    <p style="font-size:14px; color:var(--text-secondary); margin:0 0 22px;">
+      Il lotto resterà fermo allo stato attuale e verrà segnalato come eccezione.
+      I dati parziali già scritti da questa fase verranno ripuliti.
+    </p>
+    <div style="display:flex; gap:10px; justify-content:flex-end;">
+      <button type="button" class="btn btn--secondario" id="btn-annulla-annulla">No, torna indietro</button>
+      <button type="button" class="btn btn--pericolo" id="btn-annulla-conferma">Sì, annulla l'elaborazione</button>
+    </div>
+  </div>
+</div>
+
+<div id="modal-etichetta-mancante" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:1000; padding:20px; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:16px; max-width:460px; width:100%; padding:28px; box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <h2 id="modal-etichetta-mancante-titolo" style="margin:0 0 10px; font-size:17px;"></h2>
+    <p id="modal-etichetta-mancante-testo" style="font-size:14px; color:var(--text-secondary); margin:0 0 22px;"></p>
+    <form id="form-etichetta-mancante" method="post">
+      <input type="hidden" name="next" id="modal-etichetta-mancante-next" value="">
+      <div style="display:flex; gap:10px; justify-content:flex-end;">
+        <button type="button" class="btn btn--secondario" id="btn-etichetta-mancante-annulla">Annulla</button>
+        <button type="submit" class="btn btn--primario" id="btn-etichetta-mancante-conferma"></button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if fase_wizard == 5 %}
 <div class="card">
   <h2 class="card__titolo">Tutte le difformita ({{ difformita_lotto | length }})</h2>
   {% if difformita_lotto %}
@@ -403,6 +471,7 @@
   <div class="stato-vuoto">Nessuna difformita rilevata.</div>
   {% endif %}
 </div>
+{% endif %}
 {% endblock %}
 
 {% block script %}

@@ -63,8 +63,14 @@
       <div class="campo">
         <label for="ocr-{{ campo }}">{{ etichetta }}</label>
         {% if campo in campi_booleani %}
-        <input type="checkbox" name="{{ campo }}" id="ocr-{{ campo }}" value="true"
-               {% if val == true or val == 'true' %}checked{% endif %}>
+        <div class="toggle-vero-falso" role="group" aria-label="{{ etichetta }}">
+          <input type="radio" name="{{ campo }}" id="ocr-{{ campo }}-vero" value="true"
+                 {% if val == true or val == 'true' %}checked{% endif %}>
+          <label for="ocr-{{ campo }}-vero">Vero</label>
+          <input type="radio" name="{{ campo }}" id="ocr-{{ campo }}-falso" value="false"
+                 {% if val != true and val != 'true' %}checked{% endif %}>
+          <label for="ocr-{{ campo }}-falso">Falso</label>
+        </div>
         {% elif campo in campi_area %}
         <textarea name="{{ campo }}" id="ocr-{{ campo }}" rows="3">{{ val or '' }}</textarea>
         {% else %}

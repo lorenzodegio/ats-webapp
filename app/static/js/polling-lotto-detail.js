@@ -67,9 +67,13 @@
 
         if (badgePausa && formPausa && formRiprendi) {
           const inPausa = dati.richiesta_controllo === "pausa";
+          const inAnnullamento = dati.richiesta_controllo === "annulla";
           badgePausa.style.display = inPausa ? "inline-flex" : "none";
-          formPausa.style.display = inPausa ? "none" : "inline";
-          formRiprendi.style.display = inPausa ? "inline" : "none";
+          // "annulla" e' terminale: niente pausa/riprendi mentre e' in corso
+          // (evita che un click su "pausa" sovrascriva la richiesta di
+          // annullamento, vedi metti_in_pausa in lotti.py).
+          formPausa.style.display = (inPausa || inAnnullamento) ? "none" : "inline";
+          formRiprendi.style.display = (inPausa && !inAnnullamento) ? "inline" : "none";
         }
 
         if (statoMacchina) {
@@ -104,6 +108,37 @@
   }
 
 
+  // ─── 1b. Conferma "Annulla elaborazione" ──────────────────────────────────
+  // Sostituisce il confirm() nativo del browser: il suo pulsante "Annulla"
+  // (il Cancel di sistema, tradotto) si scontrava con l'azione "Annulla"
+  // dell'app — sembrava dire "sì, annulla" ma voleva dire il contrario
+  // ("annulla questo popup, non fare nulla"). Qui i due pulsanti sono
+  // scritti per esteso, senza ambiguità.
+
+  const formAnnulla = document.getElementById("form-annulla-elaborazione");
+  const modalAnnulla = document.getElementById("modal-conferma-annulla");
+  if (formAnnulla && modalAnnulla) {
+    const btnConferma = document.getElementById("btn-annulla-conferma");
+    const btnAnnulla = document.getElementById("btn-annulla-annulla");
+
+    formAnnulla.addEventListener("submit", (e) => {
+      e.preventDefault();
+      modalAnnulla.style.display = "flex";
+    });
+    btnAnnulla.addEventListener("click", () => {
+      modalAnnulla.style.display = "none";
+    });
+    btnConferma.addEventListener("click", () => {
+      btnConferma.disabled = true;
+      btnConferma.textContent = "Annullamento in corso…";
+      formAnnulla.submit();
+    });
+    modalAnnulla.addEventListener("click", (e) => {
+      if (e.target === modalAnnulla) modalAnnulla.style.display = "none";
+    });
+  }
+
+
   // ─── 2. Filtro gravità difformità ─────────────────────────────────────────
 
   window.filtraDifformita = function (gravita) {
@@ -118,7 +153,25 @@
   };
 
 
-  // ─── 3. Modal confronto/correzione OCR ───────────────────────────────────
+  // ─── 3. Filtro score OCR minimo ────────────────────────────────────────────
+  // Mostra solo le prescrizioni con score OCR sotto la soglia scelta (o senza
+  // score), cosi' l'operatore puo' concentrarsi su quelle da ricontrollare.
+
+  window.filtraScoreOcr = function (sogliaStr) {
+    const righe = document.querySelectorAll("#tabella-qualita tbody tr");
+    const soglia = sogliaStr === "" ? null : parseFloat(sogliaStr);
+    righe.forEach((riga) => {
+      if (soglia === null || isNaN(soglia)) {
+        riga.style.display = "";
+        return;
+      }
+      const score = riga.dataset.score === "" ? null : parseFloat(riga.dataset.score);
+      riga.style.display = (score === null || score < soglia) ? "" : "none";
+    });
+  };
+
+
+  // ─── 4. Modal confronto/correzione OCR ───────────────────────────────────
 
   const ETICHETTE_CAMPO = {
     cognome_nome_assistito: "Cognome / Nome assistito",
@@ -128,9 +181,10 @@
     testo_prescrizione: "Testo prescrizione",
     metodo_estrattivo_olio: "Metodo estrattivo olio",
     forma_farmaceutica: "Forma farmaceutica",
-    data_prescrizione: "Data prescrizione",
+    // data_prescrizione e data_invio omessi di proposito: vengono presi
+    // sempre dall'Excel Regione, mai dalla lettura OCR (vedi lo stesso
+    // elenco in lotti.py:ETICHETTE_CAMPO_OCR).
     data_etichetta_preparazione: "Data preparazione etichetta",
-    data_invio: "Data invio / emissione",
     etichetta_data_scadenza: "Data scadenza etichetta",
     timbro_medico: "Timbro medico",
     firma_medico: "Firma medico",
@@ -190,9 +244,13 @@
           <label style="display:block; font-size:11px; font-weight:600; color:var(--text-secondary); margin-bottom:3px;">${label}</label>`;
 
         if (CAMPI_BOOLEANI.has(campo)) {
-          const checked = valStr === "true" || val === true ? "checked" : "";
-          html += `<input type="checkbox" name="${campo}" id="ocr-${campo}" ${checked}
-            style="width:18px; height:18px; cursor:pointer;">`;
+          const isVero = valStr === "true" || val === true;
+          html += `<div class="toggle-vero-falso">
+            <input type="radio" name="${campo}" id="ocr-${campo}-vero" value="true" ${isVero ? "checked" : ""}>
+            <label for="ocr-${campo}-vero">Vero</label>
+            <input type="radio" name="${campo}" id="ocr-${campo}-falso" value="false" ${!isVero ? "checked" : ""}>
+            <label for="ocr-${campo}-falso">Falso</label>
+          </div>`;
         } else if (CAMPI_AREA.has(campo)) {
           html += `<textarea name="${campo}" rows="3"
             style="width:100%; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px; font-size:12px; font-family:var(--font-ui); resize:vertical;">${valStr}</textarea>`;
@@ -251,5 +309,45 @@
       btn.textContent = "Salva correzioni";
     }
   });
+
+
+  // ─── 5. Modal segnalazione "etichetta mancante" ───────────────────────────
+  // Stesso principio del modal Annulla sopra: niente confirm() nativo,
+  // pulsanti scritti per esteso cosi' l'esito di ciascuna scelta e' chiaro
+  // prima di confermare (specialmente "conferma" qui esclude in blocco
+  // altre difformita', un effetto che va reso esplicito prima del click).
+
+  const modalEtichetta = document.getElementById("modal-etichetta-mancante");
+  if (modalEtichetta) {
+    const formEtichetta = document.getElementById("form-etichetta-mancante");
+    const titoloEtichetta = document.getElementById("modal-etichetta-mancante-titolo");
+    const testoEtichetta = document.getElementById("modal-etichetta-mancante-testo");
+    const nextEtichetta = document.getElementById("modal-etichetta-mancante-next");
+    const btnConfermaEtichetta = document.getElementById("btn-etichetta-mancante-conferma");
+    const btnAnnullaEtichetta = document.getElementById("btn-etichetta-mancante-annulla");
+
+    window.apriModalEtichettaMancante = function (lottoId, prescrizioneId, azione) {
+      formEtichetta.action = `/lotti/${lottoId}/prescrizioni/${prescrizioneId}/etichetta-mancante/${azione}`;
+      nextEtichetta.value = `${window.location.pathname}?fase=5`;
+      if (azione === "conferma") {
+        titoloEtichetta.textContent = "Confermare: etichetta assente?";
+        testoEtichetta.textContent = "Le difformità 11, 12, 13, 16 e 19 di questa prescrizione, se ancora da gestire, verranno escluse automaticamente: dipendono tutte da dati leggibili solo sull'etichetta.";
+        btnConfermaEtichetta.className = "btn btn--primario";
+        btnConfermaEtichetta.textContent = "Sì, l'etichetta manca";
+      } else {
+        titoloEtichetta.textContent = "Escludere la segnalazione?";
+        testoEtichetta.textContent = "L'etichetta risulta presente: nessuna difformità verrà toccata, restano tutte da gestire singolarmente come al solito.";
+        btnConfermaEtichetta.className = "btn btn--secondario";
+        btnConfermaEtichetta.textContent = "Sì, l'etichetta è presente";
+      }
+      modalEtichetta.style.display = "flex";
+    };
+    btnAnnullaEtichetta.addEventListener("click", () => {
+      modalEtichetta.style.display = "none";
+    });
+    modalEtichetta.addEventListener("click", (e) => {
+      if (e.target === modalEtichetta) modalEtichetta.style.display = "none";
+    });
+  }
 
 })();
