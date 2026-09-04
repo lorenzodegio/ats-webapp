@@ -459,6 +459,7 @@ Rispondi SOLO con questo JSON, nessun altro testo:
 {{"posologia_presente": true}} oppure {{"posologia_presente": false}}"""
 
     risultato = _chiama_llm_testo(prompt)
+    logger.info(f"  check_10B [{r.get('barcode', '?')}]: risposta LLM = {risultato}")
     presente = risultato.get("posologia_presente", None)
 
     if presente is None:
@@ -831,6 +832,7 @@ Rispondi SOLO con questo JSON, nessun altro testo:
 {{"dicitura_presente": true}} oppure {{"dicitura_presente": false}}"""
 
     risultato = _chiama_llm_testo(prompt)
+    logger.info(f"  check_05A [{r.get('barcode', '?')}]: risposta LLM = {risultato}")
     presente = risultato.get("dicitura_presente", None)
 
     if presente is None:
@@ -839,6 +841,34 @@ Rispondi SOLO con questo JSON, nessun altro testo:
         return False
 
     return not presente
+
+
+# Parole troppo generiche/di contorno per contare come "nome proprio di un
+# metodo estrattivo" quando il modello le restituisce in nome_metodo (vedi
+# _nome_metodo_e_generico) — include le stesse frasi gia' escluse nel
+# prompt (INDIZI_PROCESSO_OLEOSO, scomposte in singole parole) piu' i
+# connettivi/abbreviazioni latine che a volte fanno sembrare una citazione
+# vera anche quando non nomina nessuno (es. "sec metodica et al.").
+_PAROLE_GENERICHE_METODO = {
+    "metodica", "metodo", "estrazione", "estratto", "oleosa", "oleoso",
+    "olio", "mct", "et", "al", "sec", "secondo", "tramite", "processo",
+    "vegetale", "liquido", "contagocce", "caldo", "oliva", "soluzione",
+}
+
+
+def _nome_metodo_e_generico(nome_metodo: str) -> bool:
+    """
+    True se nome_metodo (restituito dal modello per check_09B) non
+    contiene nessuna parola che sembri un vero nome proprio — cioe' se
+    e' vuoto, o fatto solo di connettivi/descrizioni generiche gia'
+    escluse dal prompt. Verifica programmatica per non fidarsi ciecamente
+    del booleano metodo_specifico_presente quando il modello lo mette a
+    true senza poter indicare un nome vero.
+    """
+    if not nome_metodo:
+        return True
+    parole = re.findall(r"[a-zà-ù]+", nome_metodo.lower())
+    return all(p in _PAROLE_GENERICHE_METODO or len(p) < 4 for p in parole)
 
 
 def check_09B_semantico(r: dict) -> bool:
@@ -853,6 +883,15 @@ def check_09B_semantico(r: dict) -> bool:
        errore di battitura/OCR che il confronto esatto Python non ha
        riconosciuto (es. "Tylray", "Avextrà", "Tilray0")
     In entrambi i casi -> nessuna difformita'.
+
+    Il modello a volte rispondeva "metodo_specifico_presente: true" anche
+    su testi che non nominano davvero nessun metodo (es. "estrazione
+    oleosa sec metodica et al." — "sec ... et al." suona come una
+    citazione anche senza un nome), producendo falsi negativi sulla
+    difformita'. Ora gli si chiede anche il NOME del metodo quando
+    risponde "true", e la risposta viene scartata (vedi
+    _nome_metodo_e_generico) se quel nome e' vuoto o e' solo una
+    ripetizione delle descrizioni generiche gia' escluse nel prompt.
     """
     forma   = str(r.get("forma_farmaceutica", "")).strip().lower()
     testo   = str(r.get("testo_prescrizione", "")).strip()
@@ -879,15 +918,19 @@ DOMANDA B — Se la risposta ad A e' no: il testo cita comunque un
 metodo estrattivo specifico (nome proprio di una metodica brevettata/
 pubblicata), anche se diverso da Ramella/Calvi/SIFAP/SICAM/Romano/
 Hazecamp/Cannazza? Non contare descrizioni generiche come "estrazione
-oleosa" o "olio MCT" — sono ingredienti/processi generici, non un
-metodo con nome proprio.
+oleosa", "olio MCT", "sec metodica" o "et al." senza un nome proprio
+associato — sono ingredienti/processi generici o citazioni tronche, non
+un metodo con nome proprio. Se rispondi "si" alla domanda B, devi poter
+indicare il nome proprio del metodo effettivamente citato nel testo.
 
 Rispondi SOLO con questo JSON:
-{{"produttore_industriale": true|false, "metodo_specifico_presente": true|false}}"""
+{{"produttore_industriale": true|false, "metodo_specifico_presente": true|false, "nome_metodo": "il nome proprio citato nel testo, o stringa vuota se non presente"}}"""
 
     risultato = _chiama_llm_testo(prompt)
+    logger.info(f"  check_09B [{r.get('barcode', '?')}]: risposta LLM = {risultato}")
     produttore_industriale = risultato.get("produttore_industriale", None)
     metodo_presente = risultato.get("metodo_specifico_presente", None)
+    nome_metodo = str(risultato.get("nome_metodo", "") or "").strip()
 
     if produttore_industriale is None and metodo_presente is None:
         logger.warning("  check_09B: risposta LLM non valida, fallback a True (difformita')")
@@ -897,7 +940,13 @@ Rispondi SOLO con questo JSON:
         return False  # produttore industriale riconosciuto -> nessuna difformita'
 
     if metodo_presente:
-        return False  # metodo specifico riconosciuto -> nessuna difformita'
+        if _nome_metodo_e_generico(nome_metodo):
+            logger.info(
+                f"  check_09B [{r.get('barcode', '?')}]: 'metodo_specifico_presente' scartato, "
+                f"nome indicato generico/vuoto ({nome_metodo!r})"
+            )
+        else:
+            return False  # metodo specifico riconosciuto, con nome verificabile -> nessuna difformita'
 
     return True
 
@@ -934,6 +983,7 @@ Rispondi SOLO con questo JSON:
 {{"stessa_persona": true}} oppure {{"stessa_persona": false}}"""
 
     risultato = _chiama_llm_testo(prompt)
+    logger.info(f"  check_19B [{r.get('barcode', '?')}]: risposta LLM = {risultato}")
     stessa = risultato.get("stessa_persona", None)
 
     if stessa is None:
