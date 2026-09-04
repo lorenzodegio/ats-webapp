@@ -28,12 +28,26 @@ STATI_CONCLUSI = [StatoLotto.completato, StatoLotto.archiviato]
 @router.get("/", response_class=HTMLResponse)
 def dashboard(
     request: Request,
-    anno: Optional[int] = None,
-    mese: Optional[int] = None,
+    anno: Optional[str] = None,
+    mese: Optional[str] = None,
     stato: Optional[str] = None,
     db: Session = Depends(get_db),
     utente: Utente = Depends(get_utente_corrente),
 ):
+    # I <select> del form filtri hanno un'opzione vuota ("Tutti") come
+    # default: il browser la invia comunque come "anno=" (stringa vuota),
+    # non omette il parametro. Con Optional[int] FastAPI la rifiuta con un
+    # errore di validazione — "Filtra" senza aver scelto nulla andava
+    # sempre in errore. Qui il parametro arriva come stringa (sempre
+    # valida, anche vuota) e la conversione a intero avviene a mano.
+    def _int_o_none(valore):
+        try:
+            return int(valore) if valore else None
+        except ValueError:
+            return None
+
+    anno = _int_o_none(anno)
+    mese = _int_o_none(mese)
     # ---------- Pannello "in corso ora" ----------
     lotti_attivi = (
         db.query(LottoMensile)
