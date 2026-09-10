@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
 from app.auth import get_utente_corrente
 from app.models import LottoMensile, StatoLotto, Prescrizione, Difformita, Utente
-from app.progresso import percentuale_avanzamento, etichetta_stato, messaggio_fase_operatore
+from app.progresso import percentuale_avanzamento, etichetta_stato, messaggio_fase_operatore, estrai_progresso_da_log
 
 router = APIRouter(tags=["dashboard"])
 templates = Jinja2Templates(directory="app/templates")
@@ -59,7 +59,10 @@ def dashboard(
     lotti_attivi_vista = [
         {
             "lotto": l,
-            "percentuale": percentuale_avanzamento(l.stato),
+            "percentuale": percentuale_avanzamento(
+                l.stato,
+                estrai_progresso_da_log(l.elaborazione_attiva.log) if l.elaborazione_attiva else None,
+            ),
             "etichetta_stato": etichetta_stato(l.stato),
             "elaborazione_attiva": l.elaborazione_attiva,
             "messaggio_operatore": messaggio_fase_operatore(

@@ -211,14 +211,54 @@ def indice_fase_wizard(stato: StatoLotto, lotto=None) -> int:
     return 3
 
 
-def percentuale_avanzamento(stato: StatoLotto) -> int:
+def _percentuale_proporzionale(inizio: int, fine: int, progresso_item) -> int:
+    """Interpola tra 'inizio' e 'fine' in base a progresso_item
+    ({"attuale": i, "totale": N}, da estrai_progresso_da_log) — se non
+    ancora disponibile (fase appena avviata, nessuna riga "[i/N]" ancora
+    nel log), resta fermo sul valore di inizio dell'intervallo."""
+    if not progresso_item or not progresso_item.get("totale"):
+        return inizio
+    attuale = progresso_item.get("attuale", 0) or 0
+    totale = progresso_item["totale"]
+    frazione = max(0.0, min(1.0, attuale / totale))
+    return round(inizio + frazione * (fine - inizio))
+
+
+def percentuale_avanzamento(stato: StatoLotto, progresso_item=None) -> int:
+    """
+    Percentuale mostrata nella barra di avanzamento — a tratti fissi per
+    le fasi senza un contatore per-ricetta significativo (preprocessing),
+    proporzionale ricetta per ricetta per OCR e analisi difformita' (le
+    due fasi piu' lunghe, dove un avanzamento granulare aiuta davvero
+    l'operatore a capire quanto manca), tramite progresso_item =
+    {"attuale": i, "totale": N} letto dal log via estrai_progresso_da_log.
+
+    Suddivisione:
+        0%          prima del preprocessing (bozza/caricamento)
+        5%          preprocessing (fisso, in corso o appena concluso)
+        5% -> 80%   elaborazione OCR (proporzionale)
+        80%         OCR concluso, in attesa dell'avvio analisi difformita'
+        80% -> 95%  analisi difformita' (proporzionale)
+        95%         difformita' concluse, in attesa di "Completa lotto"
+        100%        completato/archiviato
+    """
     if stato == StatoLotto.eccezione:
         return 100
-    try:
-        idx = ORDINE_STATI.index(stato)
-    except ValueError:
-        idx = 0
-    return round(idx / (len(ORDINE_STATI) - 1) * 100)
+    if stato in (StatoLotto.bozza, StatoLotto.caricamento):
+        return 0
+    if stato in (StatoLotto.preprocessing, StatoLotto.revisione_barcode):
+        return 5
+    if stato == StatoLotto.elaborazione_ocr:
+        return _percentuale_proporzionale(5, 80, progresso_item)
+    if stato == StatoLotto.revisione_qualita:
+        return 80
+    if stato == StatoLotto.analisi_difformita:
+        return _percentuale_proporzionale(80, 95, progresso_item)
+    if stato == StatoLotto.revisione_difformita:
+        return 95
+    if stato in (StatoLotto.completato, StatoLotto.archiviato):
+        return 100
+    return 0
 
 
 def etichetta_stato(stato: StatoLotto) -> str:
