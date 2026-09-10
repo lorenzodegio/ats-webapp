@@ -19,6 +19,12 @@
   <span class="mono">{{ presc.barcode or (presc.sp_pdf_path.split('/')[-1] if presc.sp_pdf_path else presc.id) }}</span>
 </div>
 
+{% if request.query_params.get('cfa') == 'ok' %}
+<div class="ok-form">Copia pubblicata nella cartella CFA su SharePoint.</div>
+{% elif request.query_params.get('cfa') == 'errore' %}
+<div class="errore-form">Impossibile pubblicare in CFA: PDF della prescrizione non trovato.</div>
+{% endif %}
+
 <div class="split-revisione">
   <div class="card split-revisione__pdf">
     <h2 class="card__titolo">{% if tipo_anteprima == 'pdf' %}PDF originale{% else %}Pagina originale{% endif %}</h2>
@@ -86,6 +92,21 @@
 
     {% else %}
     <h2 class="card__titolo">Difformità di questa prescrizione</h2>
+
+    {% if mostra_etichetta_mancante %}
+    <div class="card" style="border-left: 4px solid var(--terracotta); margin-bottom:16px; padding:16px;">
+      <p style="font-size:13px; margin:0 0 10px;">
+        ⚠ Questa prescrizione ha tutte insieme le difformità 11, 12, 13 e 16 — tipico segno che manchi proprio l'etichetta. Confronta con il PDF a fianco.
+      </p>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn btn--primario" style="padding:6px 10px; font-size:12px;"
+          onclick="apriModalEtichettaMancante('{{ lotto.id }}', '{{ presc.id }}', 'conferma')">Conferma: etichetta assente</button>
+        <button type="button" class="btn btn--secondario" style="padding:6px 10px; font-size:12px;"
+          onclick="apriModalEtichettaMancante('{{ lotto.id }}', '{{ presc.id }}', 'escludi')">Escludi: etichetta presente</button>
+      </div>
+    </div>
+    {% endif %}
+
     {% if da_gestire %}
     <table class="tabella">
       <thead><tr><th>Codice</th><th>Descrizione</th><th></th></tr></thead>
@@ -93,7 +114,17 @@
         {% for d in da_gestire %}
         <tr>
           <td class="mono">{{ d.codice }}</td>
-          <td>{{ d.descrizione }}</td>
+          <td>
+            {{ d.descrizione }}
+            {% set dati_regione = dati_regione_per_difformita.get(d.id|string) %}
+            {% if dati_regione %}
+            <div style="margin-top:6px; font-size:12px; color:var(--text-secondary);">
+              {% for etichetta, valore in dati_regione %}
+              <div class="mono">{{ etichetta }}: <strong>{{ valore or '—' }}</strong></div>
+              {% endfor %}
+            </div>
+            {% endif %}
+          </td>
           <td style="display:flex; gap:8px;">
             <form method="post" action="/lotti/{{ lotto.id }}/difformita/{{ d.id }}/conferma">
               <input type="hidden" name="next" value="/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/revisione-difformita">
@@ -108,11 +139,35 @@
         {% endfor %}
       </tbody>
     </table>
-    {% else %}
+    {% elif not mostra_etichetta_mancante %}
     <div class="stato-vuoto">Nessuna difformità da gestire su questa ricetta.</div>
-    <a class="btn btn--primario" href="/lotti/{{ lotto.id }}">Torna all'elenco</a>
     {% endif %}
+
+    <div style="margin-top:20px; padding-top:16px; border-top:1px solid var(--border-color);">
+      {% if presc.pubblicata_cfa_at %}
+      <div class="ok-form" style="margin:0;">Prescrizione già in cartella CFA.</div>
+      {% else %}
+      <form method="post" action="/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/cfa">
+        <input type="hidden" name="next" value="/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/revisione-difformita">
+        <button type="submit" class="btn btn--pericolo" title="Copia il PDF di questa prescrizione nella cartella CFA su SharePoint">CFA</button>
+      </form>
+      {% endif %}
+    </div>
+
+    <div style="display:flex; gap:10px; margin-top:16px; padding-top:16px; border-top:1px solid var(--border-color);">
+      <a class="btn btn--secondario" href="/lotti/{{ lotto.id }}?fase=5#revisione-difformita">&larr; Torna al menu</a>
+      {% if prescrizione_successiva %}
+      <a class="btn btn--primario" href="/lotti/{{ lotto.id }}/prescrizioni/{{ prescrizione_successiva.id }}/revisione-difformita">Prescrizione successiva &rarr;</a>
+      {% else %}
+      <button type="button" class="btn btn--primario" disabled title="Nessun'altra prescrizione da gestire in questo lotto">Prescrizione successiva &rarr;</button>
+      {% endif %}
+    </div>
     {% endif %}
   </div>
 </div>
+{% include "_modal_etichetta_mancante.html" %}
+{% endblock %}
+
+{% block script %}
+<script src="/static/js/polling-lotto-detail.js"></script>
 {% endblock %}

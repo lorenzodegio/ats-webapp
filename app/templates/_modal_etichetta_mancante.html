@@ -1,0 +1,13 @@
+<div id="modal-etichetta-mancante" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:1000; padding:20px; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:16px; max-width:460px; width:100%; padding:28px; box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <h2 id="modal-etichetta-mancante-titolo" style="margin:0 0 10px; font-size:17px;"></h2>
+    <p id="modal-etichetta-mancante-testo" style="font-size:14px; color:var(--text-secondary); margin:0 0 22px;"></p>
+    <form id="form-etichetta-mancante" method="post">
+      <input type="hidden" name="next" id="modal-etichetta-mancante-next" value="">
+      <div style="display:flex; gap:10px; justify-content:flex-end;">
+        <button type="button" class="btn btn--secondario" id="btn-etichetta-mancante-annulla">Annulla</button>
+        <button type="submit" class="btn btn--primario" id="btn-etichetta-mancante-conferma"></button>
+      </div>
+    </form>
+  </div>
+</div>

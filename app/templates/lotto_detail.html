@@ -194,12 +194,12 @@
   {% if lotto.stato.value != 'elaborazione_ocr' %}
   <div class="filtri-riga" style="margin-bottom:16px;">
     <label for="filtro-score-ocr" style="font-size:13px; color:var(--text-secondary);">Mostra solo score OCR sotto:</label>
-    <input type="number" id="filtro-score-ocr" min="0" max="100" step="1" placeholder="es. 80"
+    <input type="number" id="filtro-score-ocr" data-lotto-id="{{ lotto.id }}" min="0" max="100" step="1" placeholder="es. 80"
            oninput="filtraScoreOcr(this.value)"
            style="width:80px; padding:6px 10px; border:1px solid var(--border-color); border-radius:8px; font-family:var(--font-ui); font-size:13px;">
     <span style="font-size:13px; color:var(--text-secondary);">%</span>
     <button type="button" class="btn btn--secondario" style="padding:6px 10px; font-size:12px;"
-            onclick="document.getElementById('filtro-score-ocr').value=''; filtraScoreOcr('');">Azzera</button>
+            onclick="azzeraFiltroScoreOcr();">Azzera</button>
   </div>
   {% endif %}
   <table class="tabella" id="tabella-qualita">
@@ -236,30 +236,12 @@
 
 {# ---------------- Revisione difformita ---------------- #}
 {% if fase_wizard == 5 %}
-{% if prescrizioni_etichetta_mancante %}
-<div class="card" style="border-left: 4px solid var(--terracotta);">
-  <h2 class="card__titolo">⚠ Etichetta mancante rilevata</h2>
-  <p style="font-size:13px; color:var(--text-secondary); margin-top:-8px;">
-    Queste prescrizioni hanno tutte insieme le difformità 11, 12, 13 e 16 — tipico segno che manchi proprio l'etichetta. Conferma se manca davvero (esclude in blocco 11, 12, 13, 16, 19) oppure escludi la segnalazione se l'etichetta è presente (le difformità restano da gestire una per una).
-  </p>
-  <table class="tabella">
-    <thead><tr><th>Barcode</th><th>Azione</th></tr></thead>
-    <tbody>
-      {% for p in prescrizioni_etichetta_mancante %}
-      <tr>
-        <td class="mono">{{ p.barcode or '—' }}</td>
-        <td style="display:flex; gap:8px;">
-          <button type="button" class="btn btn--primario" style="padding:6px 10px; font-size:12px;"
-            onclick="apriModalEtichettaMancante('{{ lotto.id }}', '{{ p.id }}', 'conferma')">Conferma: etichetta assente</button>
-          <button type="button" class="btn btn--secondario" style="padding:6px 10px; font-size:12px;"
-            onclick="apriModalEtichettaMancante('{{ lotto.id }}', '{{ p.id }}', 'escludi')">Escludi: etichetta presente</button>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-{% endif %}
+{# La card aggregata "Etichetta mancante rilevata" e' stata rimossa da
+   qui: le stesse difformita' (11, 12, 13, 16, 19) compaiono comunque,
+   una per una, nella tabella "Revisione difformità" subito sotto —
+   la segnalazione/azione rapida resta disponibile nella pagina della
+   singola prescrizione (revisione_dettaglio.html), dove non duplica
+   nulla. #}
 <div class="card" id="revisione-difformita">
   <h2 class="card__titolo">Revisione difformità</h2>
   {% if difformita_da_gestire %}
@@ -430,19 +412,7 @@
   </div>
 </div>
 
-<div id="modal-etichetta-mancante" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:1000; padding:20px; align-items:center; justify-content:center;">
-  <div style="background:#fff; border-radius:16px; max-width:460px; width:100%; padding:28px; box-shadow:0 20px 60px rgba(0,0,0,0.3);">
-    <h2 id="modal-etichetta-mancante-titolo" style="margin:0 0 10px; font-size:17px;"></h2>
-    <p id="modal-etichetta-mancante-testo" style="font-size:14px; color:var(--text-secondary); margin:0 0 22px;"></p>
-    <form id="form-etichetta-mancante" method="post">
-      <input type="hidden" name="next" id="modal-etichetta-mancante-next" value="">
-      <div style="display:flex; gap:10px; justify-content:flex-end;">
-        <button type="button" class="btn btn--secondario" id="btn-etichetta-mancante-annulla">Annulla</button>
-        <button type="submit" class="btn btn--primario" id="btn-etichetta-mancante-conferma"></button>
-      </div>
-    </form>
-  </div>
-</div>
+{% include "_modal_etichetta_mancante.html" %}
 
 {% if fase_wizard == 5 %}
 <div class="card">

@@ -1098,40 +1098,29 @@ def _evidenzia_difformita_escluse(destinazione: Path, db: Session, lotto: LottoM
         log.exception("Impossibile evidenziare le difformita' escluse nell'Excel finale (il file resta comunque salvato)")
 
 
-def _pubblica_cfa_su_sharepoint(db: Session, lotto: LottoMensile) -> int:
+def pubblica_prescrizione_su_cfa(lotto: LottoMensile, presc: Prescrizione) -> bool:
     """
-    Al completamento del lotto, copia in una cartella "CFA" dentro la
-    cartella del lotto (Macchina Locale/Archivio/{anno}/{mese}/{lotto}/CFA)
-    tutte le ricette che hanno almeno una difformita' CONFERMATA — senza
-    distinzione di farmacia (a differenza dello ZIP di export, che le
-    raggruppa per farmacia): qui e' un unico raccoglitore piatto, pensato
-    per chi deve rivedere solo le ricette con difformita' confermate di
-    questo lotto, indipendentemente da quale farmacia le ha spedite.
+    Copia il PDF di UNA prescrizione nella cartella "CFA" del lotto su
+    SharePoint (Macchina Locale/Archivio/{anno}/{mese}/{lotto}/CFA) —
+    azione esplicita dell'operatore (pulsante dedicato "CFA" in revisione
+    difformita'), indipendente dal confermare/escludere una difformita':
+    prima finiva qui automaticamente qualunque prescrizione con almeno
+    una difformita' confermata al completamento del lotto, ma e' stato
+    scisso in due azioni separate — "Conferma" torna a fare solo
+    Difformita.stato=confermata, "CFA" e' un pulsante a se stante.
     """
     if not lotto.sp_lavoro_path:
-        return 0
-    prescrizioni_con_confermate = (
-        db.query(Prescrizione)
-        .join(Difformita)
-        .filter(Prescrizione.lotto_id == lotto.id, Difformita.stato == StatoDifformita.confermata)
-        .distinct()
-        .all()
-    )
-    if not prescrizioni_con_confermate:
-        return 0
+        return False
+    percorso_pdf = percorso_pdf_prescrizione(presc)
+    if not percorso_pdf:
+        return False
+    origine = Path(percorso_pdf)
+    if not origine.is_file():
+        return False
     cartella_cfa = radice_sharepoint() / lotto.sp_lavoro_path / "CFA"
     cartella_cfa.mkdir(parents=True, exist_ok=True)
-    n = 0
-    for presc in prescrizioni_con_confermate:
-        percorso_pdf = percorso_pdf_prescrizione(presc)
-        if not percorso_pdf:
-            continue
-        origine = Path(percorso_pdf)
-        if not origine.is_file():
-            continue
-        shutil.copy2(origine, cartella_cfa / origine.name)
-        n += 1
-    return n
+    shutil.copy2(origine, cartella_cfa / origine.name)
+    return True
 
 
 def scrivi_excel_finale_reale(lotto_id) -> bool:
@@ -1182,7 +1171,6 @@ def scrivi_excel_finale_reale(lotto_id) -> bool:
         _evidenzia_difformita_escluse(destinazione, db, lotto)
         _evidenzia_campi_corretti(destinazione, lotto)
         pubblica_file(lotto.id, destinazione)
-        n_cfa = _pubblica_cfa_su_sharepoint(db, lotto)
 
         lotto.excel_output_filename = nome_file_output
 
@@ -1192,8 +1180,6 @@ def scrivi_excel_finale_reale(lotto_id) -> bool:
         db.commit()
 
         log_elaborazione(db, elaborazione, f"Excel finale scritto: {destinazione}")
-        if n_cfa:
-            log_elaborazione(db, elaborazione, f"{n_cfa} ricette con difformita' confermate pubblicate in CFA")
         return True
 
     except ElaborazioneAnnullata:

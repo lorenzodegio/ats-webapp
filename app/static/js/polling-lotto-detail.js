@@ -156,6 +156,13 @@
   // ─── 3. Filtro score OCR minimo ────────────────────────────────────────────
   // Mostra solo le prescrizioni con score OCR sotto la soglia scelta (o senza
   // score), cosi' l'operatore puo' concentrarsi su quelle da ricontrollare.
+  // Il valore scelto resta impostato tra un caricamento pagina e l'altro
+  // (es. apre una ricetta per correggerla e torna indietro) tramite
+  // sessionStorage, per lotto — sparisce solo premendo "Azzera".
+
+  function _chiaveFiltroScoreOcr(inputFiltro) {
+    return inputFiltro && inputFiltro.dataset.lottoId ? `filtroScoreOcr_${inputFiltro.dataset.lottoId}` : null;
+  }
 
   window.filtraScoreOcr = function (sogliaStr) {
     const righe = document.querySelectorAll("#tabella-qualita tbody tr");
@@ -168,7 +175,39 @@
       const score = riga.dataset.score === "" ? null : parseFloat(riga.dataset.score);
       riga.style.display = (score === null || score < soglia) ? "" : "none";
     });
+
+    const inputFiltro = document.getElementById("filtro-score-ocr");
+    const chiave = _chiaveFiltroScoreOcr(inputFiltro);
+    if (chiave) {
+      try {
+        if (sogliaStr) {
+          sessionStorage.setItem(chiave, sogliaStr);
+        } else {
+          sessionStorage.removeItem(chiave);
+        }
+      } catch (e) { /* storage non disponibile (es. modalita' privata): filtro resta solo per questa vista */ }
+    }
   };
+
+  window.azzeraFiltroScoreOcr = function () {
+    const inputFiltro = document.getElementById("filtro-score-ocr");
+    if (inputFiltro) inputFiltro.value = "";
+    filtraScoreOcr("");
+  };
+
+  // Ripristino all'apertura pagina.
+  (function ripristinaFiltroScoreOcr() {
+    const inputFiltro = document.getElementById("filtro-score-ocr");
+    const chiave = _chiaveFiltroScoreOcr(inputFiltro);
+    if (!chiave) return;
+    try {
+      const salvato = sessionStorage.getItem(chiave);
+      if (salvato) {
+        inputFiltro.value = salvato;
+        filtraScoreOcr(salvato);
+      }
+    } catch (e) { /* storage non disponibile */ }
+  })();
 
 
   // ─── 4. Modal confronto/correzione OCR ───────────────────────────────────
@@ -328,7 +367,12 @@
 
     window.apriModalEtichettaMancante = function (lottoId, prescrizioneId, azione) {
       formEtichetta.action = `/lotti/${lottoId}/prescrizioni/${prescrizioneId}/etichetta-mancante/${azione}`;
-      nextEtichetta.value = `${window.location.pathname}?fase=5`;
+      // Dall'elenco aggregato (lotto_detail.html) si torna li', con l'ancora
+      // sulla sezione difformita'; dalla pagina dedicata di una singola
+      // prescrizione si ricarica semplicemente quella stessa pagina.
+      nextEtichetta.value = window.location.pathname === `/lotti/${lottoId}`
+        ? `${window.location.pathname}?fase=5#revisione-difformita`
+        : window.location.pathname;
       if (azione === "conferma") {
         titoloEtichetta.textContent = "Confermare: etichetta assente?";
         testoEtichetta.textContent = "Le difformità 11, 12, 13, 16 e 19 di questa prescrizione, se ancora da gestire, verranno escluse automaticamente: dipendono tutte da dati leggibili solo sull'etichetta.";

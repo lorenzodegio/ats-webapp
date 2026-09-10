@@ -39,7 +39,7 @@ from app.real_pipeline import (
     avvia_preprocessing_reale, avvia_ocr_reale, avvia_difformita_reale,
     correggi_barcode_reale, scrivi_excel_finale_reale, esiste_lotto_in_esecuzione,
     lotto_in_esecuzione, metti_in_pausa_container, riprendi_container, annulla_container,
-    pulisci_dati_parziali_fase, log_elaborazione,
+    pulisci_dati_parziali_fase, log_elaborazione, pubblica_prescrizione_su_cfa,
 )
 from app.progresso import (
     percentuale_avanzamento, etichetta_stato, ETICHETTE_STATO,
@@ -317,6 +317,72 @@ def _serve_segnalazione_etichetta_mancante(presc: Prescrizione) -> bool:
     )
 
 
+def _prescrizione_ha_qualcosa_da_gestire(presc: Prescrizione) -> bool:
+    if any(d.stato == StatoDifformita.rilevata for d in presc.difformita):
+        return True
+    return _serve_segnalazione_etichetta_mancante(presc)
+
+
+def _prescrizione_successiva_da_gestire(db: Session, lotto: LottoMensile, presc_corrente: Prescrizione):
+    """
+    Prossima prescrizione del lotto (in ordine di barcode, dopo quella
+    corrente) che ha ancora qualcosa da gestire — una difformita' ancora
+    "rilevata" o una segnalazione etichetta mancante pendente. Un solo
+    pulsante "successiva": da quando la card aggregata "Etichetta
+    mancante rilevata" non esiste piu' nell'elenco del lotto, resta solo
+    questa pagina per gestire entrambi i casi, quindi non ha piu' senso
+    tenerli separati come prima.
+
+    L'ordine NON puo' basarsi su created_at: tutte le prescrizioni di un
+    lotto vengono create nella stessa fase di preprocessing con lo
+    stesso identico timestamp (al microsecondo), quindi un confronto
+    "created_at > created_at_corrente" non trova mai nulla — bug reale,
+    il pulsante compariva sempre disabilitato. La posizione della
+    prescrizione corrente si cerca in Python (per id, univoco) dentro
+    la lista ordinata per barcode, poi si scansiona in avanti da li'.
+    """
+    tutte = (
+        db.query(Prescrizione)
+        .filter(Prescrizione.lotto_id == lotto.id)
+        .order_by(Prescrizione.barcode.asc().nulls_last(), Prescrizione.id.asc())
+        .all()
+    )
+    trovata_corrente = False
+    for p in tutte:
+        if not trovata_corrente:
+            if p.id == presc_corrente.id:
+                trovata_corrente = True
+            continue
+        if _prescrizione_ha_qualcosa_da_gestire(p):
+            return p
+    return None
+
+
+# Difformita' che nascono dal confronto con l'Excel Regione (merge fatto
+# gia' in fase OCR da merge_regione.py — il dato e' gia' nel JSON grezzo,
+# nessuna lettura file aggiuntiva) — per queste ha senso mostrare il
+# valore Regione accanto a Conferma/Escludi, cosi' l'operatore verifica
+# invece di doversi fidare al buio.
+DATI_REGIONE_PER_CODICE = {
+    "14": [("Lordo Regione (LORDO_PRESC)", "LORDO_PRESC")],
+    "17": [("Controllo codice prescrizione (Regione)", "CONTROLLO_CODICE_PRESCRIZIONE")],
+    "18": [("Codice fiscale Regione", "COD_FISCALE")],
+}
+
+
+def _dati_regione_per_difformita(presc: Prescrizione, da_gestire: list) -> dict:
+    raw = (presc.dati_ocr.json_vllm_raw if presc.dati_ocr else None) or {}
+    risultato = {}
+    for d in da_gestire:
+        campi = DATI_REGIONE_PER_CODICE.get(d.codice)
+        if not campi:
+            continue
+        valori = [(etichetta, raw.get(chiave)) for etichetta, chiave in campi]
+        if any(v not in (None, "") for _, v in valori):
+            risultato[str(d.id)] = valori
+    return risultato
+
+
 @router.get("/lotti", response_class=HTMLResponse)
 def lista_lotti(request: Request, db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente)):
     lotti = (
@@ -351,7 +417,6 @@ def dettaglio_lotto(
     prescrizioni_undefined = [p for p in lotto.prescrizioni if p.stato_barcode == StatoBarcode.undefined]
     difformita_lotto = [d for p in lotto.prescrizioni for d in p.difformita]
     difformita_da_gestire = [d for d in difformita_lotto if d.stato == StatoDifformita.rilevata]
-    prescrizioni_etichetta_mancante = [p for p in lotto.prescrizioni if _serve_segnalazione_etichetta_mancante(p)]
 
     elaborazione_attiva = lotto.elaborazione_attiva
     progresso_item = None
@@ -369,12 +434,11 @@ def dettaglio_lotto(
         {
             "request": request, "utente": utente, "voce_attiva": "elaborazioni",
             "lotto": lotto,
-            "percentuale": percentuale_avanzamento(lotto.stato),
+            "percentuale": percentuale_avanzamento(lotto.stato, progresso_item),
             "etichetta_stato_corrente": etichetta_stato(lotto.stato),
             "prescrizioni_undefined": prescrizioni_undefined,
             "difformita_lotto": difformita_lotto,
             "difformita_da_gestire": difformita_da_gestire,
-            "prescrizioni_etichetta_mancante": prescrizioni_etichetta_mancante,
             "elaborazione_attiva": elaborazione_attiva,
             "progresso_item": progresso_item,
             "in_pausa": in_pausa,
@@ -579,6 +643,9 @@ def pagina_revisione_difformita(
         return RedirectResponse(url="/lotti", status_code=302)
     ctx = _ctx_revisione(request, utente, lotto, presc, "difformita")
     ctx["da_gestire"] = [d for d in presc.difformita if d.stato == StatoDifformita.rilevata]
+    ctx["mostra_etichetta_mancante"] = _serve_segnalazione_etichetta_mancante(presc)
+    ctx["prescrizione_successiva"] = _prescrizione_successiva_da_gestire(db, lotto, presc)
+    ctx["dati_regione_per_difformita"] = _dati_regione_per_difformita(presc, ctx["da_gestire"])
     return templates.TemplateResponse("revisione_dettaglio.html", ctx)
 
 
@@ -627,7 +694,44 @@ def gestisci_difformita(
         db.commit()
     if next.startswith(f"/lotti/{lotto_id}/"):
         return RedirectResponse(url=next, status_code=302)
-    return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=5), status_code=302)
+    # #revisione-difformita: senza l'ancora il redirect riporta la pagina
+    # in cima ad ogni conferma/esclusione, costringendo l'operatore a
+    # scorrere di nuovo fino al punto in cui era rimasto nell'elenco.
+    return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=5) + "#revisione-difformita", status_code=302)
+
+
+@router.post("/lotti/{lotto_id}/prescrizioni/{prescrizione_id}/cfa")
+def pubblica_cfa(
+    lotto_id: str, prescrizione_id: str,
+    db: Session = Depends(get_db), utente: Utente = Depends(get_utente_corrente),
+    next: str = Form(""),
+):
+    """
+    Pulsante "CFA" dedicato in revisione difformita': copia il PDF di
+    questa prescrizione nella cartella CFA del lotto su SharePoint,
+    azione a se stante — non e' piu' una conseguenza automatica del
+    confermare una difformita' (vedi pubblica_prescrizione_su_cfa).
+    """
+    lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
+    presc = _prescrizione_del_lotto(db, lotto_id, prescrizione_id)
+    if lotto is None or presc is None:
+        return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
+
+    if presc.pubblicata_cfa_at is not None:
+        # Gia' pubblicata: il pulsante in pagina e' disabilitato in questo
+        # caso, ma un secondo POST diretto (bypassando la UI) non deve
+        # ricopiare il file — l'esito resta comunque "ok".
+        esito = "ok"
+    else:
+        successo = pubblica_prescrizione_su_cfa(lotto, presc)
+        esito = "ok" if successo else "errore"
+        if successo:
+            presc.pubblicata_cfa_at = datetime.utcnow()
+            db.commit()
+
+    destinazione = next if next.startswith(f"/lotti/{lotto_id}/") else f"/lotti/{lotto_id}/prescrizioni/{prescrizione_id}/revisione-difformita"
+    separatore = "&" if "?" in destinazione else "?"
+    return RedirectResponse(url=f"{destinazione}{separatore}cfa={esito}", status_code=302)
 
 
 @router.post("/lotti/{lotto_id}/prescrizioni/{prescrizione_id}/etichetta-mancante/{azione}")
@@ -662,7 +766,10 @@ def gestisci_etichetta_mancante(
         db.commit()
     if next.startswith(f"/lotti/{lotto_id}/"):
         return RedirectResponse(url=next, status_code=302)
-    return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=5), status_code=302)
+    # #revisione-difformita: senza l'ancora il redirect riporta la pagina
+    # in cima ad ogni conferma/esclusione, costringendo l'operatore a
+    # scorrere di nuovo fino al punto in cui era rimasto nell'elenco.
+    return RedirectResponse(url=_url_dettaglio_lotto(lotto_id, fase=5) + "#revisione-difformita", status_code=302)
 
 
 COLONNE_DATI_OCR = [
@@ -1098,7 +1205,7 @@ def stato_lotto(lotto_id: str, db: Session = Depends(get_db), utente: Utente = D
         "nome": lotto.nome,
         "stato": lotto.stato.value,
         "etichetta_stato": etichetta_stato(lotto.stato),
-        "percentuale": percentuale_avanzamento(lotto.stato),
+        "percentuale": percentuale_avanzamento(lotto.stato, progresso_item),
         "fase_attiva": elaborazione_attiva.fase.value if elaborazione_attiva else None,
         "messaggio_operatore": messaggio_fase_operatore(
             elaborazione_attiva.fase if elaborazione_attiva else None,

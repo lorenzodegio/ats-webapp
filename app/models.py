@@ -355,6 +355,12 @@ class Prescrizione(Base):
     # phase4_excel.py:COLONNA_ETICHETTA_MANCANTE), poi la sua decisione.
     decisione_etichetta_mancante = Column(Enum(DecisioneEtichettaMancante), nullable=True)
 
+    # Pulsante "CFA" in revisione difformita' (vedi pubblica_cfa in
+    # lotti.py): None finche' non e' mai stata pubblicata, altrimenti
+    # quando — usato per disabilitare il pulsante dopo il primo click e
+    # mostrare "gia' in CFA" invece di lasciarlo ripetibile all'infinito.
+    pubblicata_cfa_at = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
 
     dati_ocr = relationship("DatiOcr", back_populates="prescrizione", uselist=False, cascade="all, delete-orphan")
@@ -460,8 +466,8 @@ class Difformita(Base):
             "14": GravitaDifformita.bassa,
             "16": GravitaDifformita.alta,
             "17": GravitaDifformita.alta,
-            "18": GravitaDifformita.alta,
-            "19": GravitaDifformita.alta
+            "18": GravitaDifformita.bassa,
+            "19": GravitaDifformita.bassa
         }
         return MAPPA_CODICI.get(self.codice, GravitaDifformita.bassa)
 
