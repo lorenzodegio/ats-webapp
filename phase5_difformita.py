@@ -79,6 +79,12 @@ METODI_ESTRATTIVI_NOTI = {
     "ramella", "calvi", "sifap", "sifo", "sicam", "romano", "hazecamp", "hazekamp", "cannazza"
 }
 
+# Produttori industriali: il farmaco e' gia' pronto/titolato, non serve
+# indicare una metodica estrattiva specifica (a differenza di Ramella/
+# Calvi/ecc. sopra). Elenco allineato al prompt LLM di check_09B_semantico
+# — tenerli in sync se si aggiornano.
+PRODUTTORI_INDUSTRIALI = {"tilray", "avextra", "farmalabor", "somai"}
+
 # Parole che indicano un processo generico ma NON un metodo estrattivo catalogato
 # (usate per il check deterministico di primo livello, NON per validare come metodo)
 INDIZI_PROCESSO_OLEOSO = {
@@ -272,8 +278,9 @@ def check_09_deterministico(r: dict) -> bool | None:
     if not e_oleosa:
         return False  # non e' una formulazione oleosa, check non applicabile
 
-    # Eccezione: produttore industriale (Tilray/Avextra) non richiede
-    # un metodo estrattivo specifico — il farmaco e' gia' pronto/standardizzato.
+    # Eccezione: produttore industriale (Tilray/Avextra/Farmalabor/Somaì)
+    # non richiede un metodo estrattivo specifico — il farmaco e'
+    # gia' pronto/standardizzato.
     #
     # Va controllata SEMPRE per formulazioni oleose, indipendentemente dal
     # fatto che metodo_estrattivo_olio sia vuoto o meno — prima era
@@ -281,25 +288,29 @@ def check_09_deterministico(r: dict) -> bool | None:
     # nel campo dedicato (anche "Tilray" scritto giusto, o un refuso tipo
     # "Tylray"), questo blocco veniva saltato e il controllo proseguiva
     # fino a "return True" in fondo alla funzione (difformita'), perche'
-    # "tilray"/"avextra" non sono — giustamente — nell'elenco dei metodi
-    # estrattivi veri e propri (sono un marchio di estratto gia' titolato,
-    # categoria concettualmente diversa da Ramella/Calvi/ecc.). Il
-    # fallback semantico (check_09B) non interveniva perche' scatta solo
-    # quando questa funzione restituisce None, non quando restituisce gia'
-    # True in modo definitivo.
+    # i produttori industriali non sono — giustamente — nell'elenco dei
+    # metodi estrattivi veri e propri (sono un marchio di estratto gia'
+    # titolato, categoria concettualmente diversa da Ramella/Calvi/ecc.).
+    # Il fallback semantico (check_09B) non interveniva perche' scatta
+    # solo quando questa funzione restituisce None, non quando restituisce
+    # gia' True in modo definitivo.
     #
     # Controlla sia testo_prescrizione SIA il campo dedicato (nel caso
-    # contenga gia' "Tilray"/un refuso, anche se testo_prescrizione per
+    # contenga gia' il nome/un refuso, anche se testo_prescrizione per
     # qualche motivo non lo ripete in modo leggibile). Confronto fuzzy
     # parola per parola (distanza 2) — copre refusi OCR come "Tilary".
+    # L'accento di "Somaì" viene normalizzato prima del confronto, perche'
+    # re.findall(r"[a-z]+", ...) spezzerebbe la parola sull'accento.
     if forma == "olio in flacone":
-        parole_da_controllare = re.findall(r"[a-z]+", testo)
-        if not _is_empty(metodo):
-            parole_da_controllare += re.findall(r"[a-z]+", metodo)
+        testo_normalizzato = testo.replace("ì", "i")
+        metodo_normalizzato = metodo.replace("ì", "i")
+        parole_da_controllare = re.findall(r"[a-z]+", testo_normalizzato)
+        if not _is_empty(metodo_normalizzato):
+            parole_da_controllare += re.findall(r"[a-z]+", metodo_normalizzato)
         for parola in parole_da_controllare:
             if len(parola) < 5:
                 continue  # parole troppo corte, rischio di falsi positivi
-            if _distanza_levenshtein(parola, "tilray") <= 2 or _distanza_levenshtein(parola, "avextra") <= 2:
+            if any(_distanza_levenshtein(parola, produttore) <= 2 for produttore in PRODUTTORI_INDUSTRIALI):
                 return False
 
         # Segnale indipendente dal nome specifico del marchio: la frase
@@ -308,6 +319,12 @@ def check_09_deterministico(r: dict) -> bool | None:
         # nome del marchio stesso è troppo rovinato per il confronto fuzzy
         # sopra, ma questa frase resta leggibile.
         if re.search(r"altre\s*march[ei]\s*in\s*commercio", testo):
+            return False
+
+        # Dicitura generica "estratto vegetale" (senza nome di marchio ne'
+        # metodo specifico): considerata gia' di per se' sufficiente, non
+        # richiede l'indicazione di un metodo estrattivo catalogato.
+        if re.search(r"estratt[oi]\s*vegetal[ei]", f"{testo} {metodo}"):
             return False
 
     if metodo in METODI_ESTRATTIVI_NOTI:
@@ -347,8 +364,8 @@ def check_09_deterministico(r: dict) -> bool | None:
                     return False  # metodo noto trovato nel testo, anche se il campo dedicato è vuoto
 
         # Ancora nulla: potrebbe essere un metodo nuovo non catalogato
-        # menzionato nel testo, o "Tilray"/"Avextra" scritto in modo
-        # troppo diverso anche per la tolleranza sopra -> serve
+        # menzionato nel testo, o un produttore industriale scritto in
+        # modo troppo diverso anche per la tolleranza sopra -> serve
         # interpretazione semantica
         return None
 
@@ -879,9 +896,9 @@ def check_09B_semantico(r: dict) -> bool:
     Copre due situazioni distinte, entrambe valutate dal modello:
     1. Il testo cita un metodo estrattivo specifico non ancora catalogato
        (nome proprio di metodica diverso da Ramella/Calvi/SIFAP/ecc.)
-    2. Il produttore e' industriale (Tilray/Avextra) ma scritto con un
-       errore di battitura/OCR che il confronto esatto Python non ha
-       riconosciuto (es. "Tylray", "Avextrà", "Tilray0")
+    2. Il produttore e' industriale (Tilray/Avextra/Farmalabor/Somaì) ma
+       scritto con un errore di battitura/OCR che il confronto esatto
+       Python non ha riconosciuto (es. "Tylray", "Avextrà", "Tilray0")
     In entrambi i casi -> nessuna difformita'.
 
     Il modello a volte rispondeva "metodo_specifico_presente: true" anche
@@ -908,11 +925,14 @@ METODO ESTRATTIVO GIA' RILEVATO (puo' essere vuoto): "{metodo}"
 
 Rispondi a DUE domande su questo testo:
 
-DOMANDA A — Il testo menziona "Tilray" o "Avextra" come produttore,
-anche se scritto con un possibile errore di battitura o lettura OCR
-(es. "Tylray", "Avextrà", "Tilray0", "Avextar")? Questi sono produttori
-industriali il cui farmaco e' gia' pronto e non richiede una metodica
-estrattiva specifica.
+DOMANDA A — Il testo menziona "Tilray", "Avextra", "Farmalabor" o
+"Somaì" come produttore, anche se scritto con un possibile errore di
+battitura o lettura OCR (es. "Tylray", "Avextrà", "Tilray0", "Avextar",
+"Farmalabor", "Somai")? Questi sono produttori industriali il cui
+farmaco e' gia' pronto e non richiede una metodica estrattiva
+specifica. Conta come risposta affermativa anche una dicitura generica
+come "estratto vegetale" (senza nome di marchio ne' metodo specifico)
+— e' gia' di per se' sufficiente, non serve altro.
 
 DOMANDA B — Se la risposta ad A e' no: il testo cita comunque un
 metodo estrattivo specifico (nome proprio di una metodica brevettata/
@@ -1227,7 +1247,13 @@ def elabora_cartella(cartella: Path):
     n_difformi = 0
     n_errori   = 0
 
-    for json_path in json_files:
+    for idx, json_path in enumerate(json_files, start=1):
+        # Contatore "[i/N]" — stesso formato gia' prodotto da preprocessing
+        # e OCR (letto da app/progresso.py:estrai_progresso_da_log per la
+        # barra di avanzamento): prima mancava del tutto per questa fase,
+        # quindi la percentuale in webapp restava ferma per tutta la sua
+        # durata invece di avanzare ricetta per ricetta.
+        print(f"[{idx}/{len(json_files)}] {json_path.name}")
         try:
             dati = json.loads(json_path.read_text(encoding="utf-8-sig"))
             diffs = analizza_riga(dati)
