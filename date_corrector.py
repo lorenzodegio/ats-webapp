@@ -88,12 +88,9 @@ explanation, no extra text.
 If no valid code is visible anywhere in this image, return exactly: NESSUNO
 """
 
-# ATTENZIONE: coordinate STIMATE, non ancora calibrate su una ricetta reale
-# come fatto per le date — verificare/aggiustare con lo stesso procedimento
-# (debug_crop_date.py) prima di fidarsene in produzione.
 ESENZIONE_ROI = {
-    "x1": 118, "y1": 282, "x2": 585, "y2": 427,
-    "descrizione": "Area di ricerca CODICE ESENZIONE (calibrata su ricetta reale)"
+    "x1": 0, "y1": 302, "x2": 504, "y2": 454,
+    "descrizione": "Area di ricerca CODICE ESENZIONE (calibrata su ricetta reale, con margine)"
 }
 
 PROMPT_CROP_TOTALE = """This image is a cropped region from the bottom-right corner of an Italian medical prescription, containing a small handwritten box labeled "GALEN." / "DIR.CHIAM." / "ALTRO" (or similar), with a handwritten decimal number written inside or next to it.
@@ -123,8 +120,8 @@ If the number is not clearly readable, return exactly: INCERTO
 """
 
 TOTALE_ROI = {
-    "x1": 1177, "y1": 1110, "x2": 1629, "y2": 1350,
-    "descrizione": "Area di ricerca totale_prescrizione (GALEN/DIR.CHIAM/ALTRO, calibrata su ricetta reale)"
+    "x1": 1224, "y1": 1102, "x2": 1674, "y2": 1315,
+    "descrizione": "Area di ricerca totale_prescrizione (GALEN/DIR.CHIAM/ALTRO, in basso a destra — calibrata su ricetta reale, con margine)"
 }
 
 PROMPT_CROP_TESTO_PRESCRIZIONE = """This image is a cropped region from the center-left area of an Italian medical prescription, containing the free-text "PRESCRIZIONE" section written by the doctor (drug composition, dosage, method, patient notes).
@@ -141,8 +138,8 @@ If the text is not clearly readable, return exactly: INCERTO
 """
 
 TESTO_PRESCRIZIONE_ROI = {
-    "x1": 16, "y1": 450, "x2": 1200, "y2": 800,
-    "descrizione": "Area di ricerca testo_prescrizione (blocco centrale-sinistro, calibrata su ricetta reale)"
+    "x1": 0, "y1": 407, "x2": 1130, "y2": 778,
+    "descrizione": "Area di ricerca testo_prescrizione (blocco centrale-sinistro, calibrata su ricetta reale, con margine)"
 }
 
 PROMPT_CROP_CODICE_FISCALE = """This image is a cropped region from the top-right area of an Italian medical prescription, containing the "CODICE FISCALE" (tax code) grid — a row of 16 boxes, each with one letter or digit.
@@ -167,13 +164,9 @@ Return ONLY the 16-character code, nothing else — no spaces, no explanation.
 If not clearly readable, return exactly: INCERTO
 """
 
-# ATTENZIONE: coordinate STIMATE, non ancora calibrate su una ricetta reale
-# — stesso procedimento già usato per le altre ROI: generare una pagina
-# intera, individuare a occhio la griglia CODICE FISCALE in alto a destra
-# (sotto i due barcode), e correggere qui.
 CODICE_FISCALE_ROI = {
-    "x1": 900, "y1": 150, "x2": 1650, "y2": 280,
-    "descrizione": "Area di ricerca CODICE FISCALE (griglia in alto a destra — coordinate da calibrare)"
+    "x1": 821, "y1": 223, "x2": 1627, "y2": 392,
+    "descrizione": "Area di ricerca CODICE FISCALE (griglia in alto a destra, sotto i due barcode — calibrata su ricetta reale, con margine)"
 }
 
 PROMPT_CROP_NOME_ASSISTITO = """This image is a cropped region from the top-left area of an Italian medical prescription, containing the "COGNOME E NOME DELL'ASSISTITO" (patient name) field.
@@ -193,12 +186,9 @@ Return ONLY the name/code as written, nothing else — no explanation.
 If completely empty or not readable, return exactly: INCERTO
 """
 
-# ATTENZIONE: coordinate STIMATE, non ancora calibrate su una ricetta reale —
-# stesso procedimento delle altre ROI: individuare a occhio il campo
-# "COGNOME E NOME DELL'ASSISTITO" in alto a sinistra, e correggere qui.
 NOME_ASSISTITO_ROI = {
-    "x1": 0, "y1": 0, "x2": 550, "y2": 150,
-    "descrizione": "Area di ricerca nome_cognome_assistito (in alto a sinistra — coordinate da calibrare)"
+    "x1": 0, "y1": 0, "x2": 684, "y2": 180,
+    "descrizione": "Area di ricerca nome_cognome_assistito (in alto a sinistra, include l'eventuale codice alfanumerico sostitutivo accanto al nome — calibrata su ricetta reale, con margine)"
 }
 
 # ─── Profili farmacia: regole di lettura specifiche per ogni campo etichetta ──

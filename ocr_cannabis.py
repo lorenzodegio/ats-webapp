@@ -1684,6 +1684,15 @@ def estrai_dati(pdf_path: Path) -> dict:
         log.error(f"Errore conversione PDF: {e}")
         return {}
 
+    # Barcode e nome_farmacia da Regione: calcolati qui, PRIMA del
+    # rilevamento etichetta (anziché più sotto come in origine), perché non
+    # dipendono dall'OCR — solo dal nome file e da una cache già caricata —
+    # e il rilevamento etichetta ne ha bisogno per l'ancoraggio extra
+    # specifico di farmacia (vedi PAROLE_ANCORA_EXTRA_PER_FARMACIA in
+    # etichetta_presence.py). Riusati più sotto, non ricalcolati.
+    barcode_da_filename = re.sub(r'\D', '', pdf_path.stem)
+    nome_farmacia_da_regione = recupera_profilo_farmacia_da_regione(barcode_da_filename)
+
     # Rilevamento automatico presenza/assenza etichetta (best-effort: se il
     # template non è disponibile o qualcosa fallisce, si procede comunque
     # con il prompt base, senza bloccare l'elaborazione)
@@ -1693,7 +1702,8 @@ def estrai_dati(pdf_path: Path) -> dict:
         try:
             reader = get_easyocr_reader()
             etichetta_result = detect_etichetta_from_images(
-                page_gray, template_gray, reader=reader, page_bgr=page_bgr
+                page_gray, template_gray, reader=reader, page_bgr=page_bgr,
+                nome_farmacia=nome_farmacia_da_regione,
             )
             log.info(
                 f"  Rilevamento etichetta: presente={etichetta_result.presente} "
@@ -1798,7 +1808,7 @@ def estrai_dati(pdf_path: Path) -> dict:
     # il nome è assegnato dal sistema sorgente ed è sempre corretto, a
     # differenza della lettura OCR di Qwen-VL che concatenando i due barcode
     # può confondere cifre/lettere (es. inserire cifre spurie a metà stringa).
-    barcode_da_filename = re.sub(r'\D', '', pdf_path.stem)
+    # (barcode_da_filename già calcolato in testa alla funzione, riusato qui)
     if barcode_da_filename:
         barcode_ocr = dati.get("barcode", "")
         if barcode_ocr and barcode_ocr != barcode_da_filename:
@@ -1809,6 +1819,30 @@ def estrai_dati(pdf_path: Path) -> dict:
         dati["barcode"] = barcode_da_filename
     else:
         log.warning(f"  Impossibile ricavare un barcode numerico dal nome file: {pdf_path.name}")
+
+    # nome_farmacia: recuperato da Regione (via FARMACIA_ID, stesso barcode
+    # finalizzato sopra) PRIMA di qualunque correzione basata su profilo
+    # farmacia qui sotto — non solo come ripiego quando l'OCR non legge
+    # nulla. Il profilo giusto va scelto fin da subito sul nome affidabile
+    # (Regione), non su quello letto dall'etichetta/timbro (che puo'
+    # contenere refusi OCR mai visti prima in ALIAS_NOTI): usare un nome
+    # sbagliato qui farebbe scegliere il profilo sbagliato per rileggere
+    # TUTTI gli altri campi etichetta piu' sotto.
+    # (nome_farmacia_da_regione già calcolato in testa alla funzione, riusato qui)
+    if nome_farmacia_da_regione:
+        nome_farmacia_ocr = str(dati.get("nome_farmacia", "")).strip()
+        if nome_farmacia_ocr and nome_farmacia_ocr != nome_farmacia_da_regione:
+            log.info(
+                f"  nome_farmacia: valore OCR ('{nome_farmacia_ocr}') sostituito con quello da "
+                f"Regione ('{nome_farmacia_da_regione}') — usato fin da qui per scegliere il profilo farmacia"
+            )
+        dati["nome_farmacia"] = nome_farmacia_da_regione
+    else:
+        log.warning(
+            "  nome_farmacia: nessun FARMACIA_ID Regione mappato per questo barcode — "
+            f"resta il valore OCR ('{dati.get('nome_farmacia', '')}'), verra' comunque "
+            "marcato OCR_INCERTO piu' avanti da merge_regione.py se resta senza match"
+        )
 
     # NOTA: data_prescrizione/data_emissione vengono prese ESCLUSIVAMENTE
     # da Regione in merge_regione.py — non vengono nemmeno più estratte qui,
@@ -1889,9 +1923,10 @@ def estrai_dati(pdf_path: Path) -> dict:
         # stesso motivo del punto sopra
         if not etichetta_confermata_assente:
             try:
-                nome_farmacia_da_regione = ""
-                if not str(dati.get("nome_farmacia", "")).strip():
-                    nome_farmacia_da_regione = recupera_profilo_farmacia_da_regione(dati.get("barcode", ""))
+                # nome_farmacia_da_regione e' gia' stato risolto (via
+                # barcode/FARMACIA_ID) subito dopo aver finalizzato il
+                # barcode, piu' sopra in questa funzione — riusato qui
+                # cosi' com'e', non ricalcolato.
                 dati = corrector.correggi_etichetta_per_farmacia(
                     dati, pdf_path, nome_farmacia_da_regione=nome_farmacia_da_regione
                 )
@@ -1982,7 +2017,6 @@ def main():
     inizio = datetime.now()
 
     for i, pdf in enumerate(pdf_files, 1):
-        log.info(f"[{i}/{len(pdf_files)}] {pdf.name}")
         try:
             dati = estrai_dati(pdf)
             if dati:
@@ -1999,6 +2033,13 @@ def main():
         except Exception as e:
             errori.append(pdf.name)
             log.error(f"  -> Errore: {e}")
+        # Contatore "[i/N]" stampato a fine elaborazione della ricetta, non
+        # all'inizio: la barra di avanzamento in webapp (vedi
+        # app/progresso.py:_percentuale_proporzionale, che legge l'ultima
+        # riga "[i/N]" del log) deve arrivare al tetto della fase solo
+        # quando l'ULTIMA ricetta ha davvero finito, non quando e' solo
+        # iniziata.
+        log.info(f"[{i}/{len(pdf_files)}] {pdf.name}")
 
     durata = (datetime.now() - inizio).total_seconds()
     media = durata / len(pdf_files) if pdf_files else 0

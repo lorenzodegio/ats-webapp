@@ -92,7 +92,7 @@ INDIZI_PROCESSO_OLEOSO = {
     "soluzione oleosa", "contagocce", "estratto vegetale liquido"
 }
 
-AVVERTENZE_KEYWORD = {"doping", "sportiva", "guida", "antidoping"}
+AVVERTENZE_KEYWORD = {"doping", "sportiva", "guida", "antidoping", "dopanti", "dopante"}
 
 
 # ─── Utility di parsing ──────────────────────────────────────────────────────────
@@ -232,14 +232,15 @@ def check_06(r: dict) -> bool:
 def check_07(r: dict) -> bool:
     """
     R07 — Ricetta spedita oltre 30 giorni dalla prescrizione.
-    Scatta anche se una delle due date e' assente/incerta (non e'
+    Il 30° giorno esatto e' ammesso (conforme): scatta solo da 31 giorni
+    in su. Scatta anche se una delle due date e' assente/incerta (non e'
     possibile verificare la coerenza temporale -> difformita').
     """
     dp = _parse_date(r.get("data_prescrizione"))
     de = _parse_date(r.get("data_emissione"))
     if not dp or not de:
         return True
-    return de >= dp + timedelta(days=30)
+    return de > dp + timedelta(days=30)
 
 
 def check_08(r: dict) -> bool:
@@ -503,6 +504,27 @@ def check_11(r: dict) -> bool:
     return False
 
 
+def _testo_contiene_parola_simile(testo: str, parole_chiave, tolleranza_rapporto: float = 0.25) -> bool:
+    """
+    Vero se almeno una PAROLA del testo (confronto parola per parola, non
+    sull'intera frase, altrimenti tutto il resto del testo attorno
+    gonfierebbe la distanza) e' abbastanza simile — Levenshtein, stessa
+    tolleranza proporzionale gia' usata in farmacie_dizionario.py per lo
+    stesso motivo — a una delle parole chiave. Copre i refusi OCR sulle
+    avvertenze (es. "dopanti" letto come "dopantj"/"dopant1"), non solo
+    il match esatto per sottostringa.
+    """
+    parole_testo = re.findall(r"[a-zà-ÿ]+", testo.lower())
+    for parola in parole_testo:
+        for chiave in parole_chiave:
+            if parola == chiave:
+                return True
+            distanza = _distanza_levenshtein(parola, chiave)
+            if distanza / max(len(chiave), 1) <= tolleranza_rapporto:
+                return True
+    return False
+
+
 def check_12(r: dict) -> bool:
     """
     R12 — Avvertenze doping/guida mancanti.
@@ -510,11 +532,19 @@ def check_12(r: dict) -> bool:
     "DPR 309/90" e "tenere fuori dalla portata dei bambini" come
     boilerplate non significativo — qui si cerca solo il contenuto
     realmente rilevante (doping, attivita' sportiva, guida).
+
+    Tollera refusi OCR sulla keyword stessa (es. "dopanti" letto male di
+    una lettera): oltre al match esatto per sottostringa, accetta anche
+    una parola del testo abbastanza simile a una delle keyword note
+    (vedi _testo_contiene_parola_simile) prima di dichiarare la
+    difformita'.
     """
     avv = str(r.get("etichetta_avvertenze", "")).lower()
     if _is_empty(avv):
         return True
-    return not any(k in avv for k in AVVERTENZE_KEYWORD)
+    if any(k in avv for k in AVVERTENZE_KEYWORD):
+        return False
+    return not _testo_contiene_parola_simile(avv, AVVERTENZE_KEYWORD)
 
 
 def check_13(r: dict) -> bool:
@@ -1248,12 +1278,6 @@ def elabora_cartella(cartella: Path):
     n_errori   = 0
 
     for idx, json_path in enumerate(json_files, start=1):
-        # Contatore "[i/N]" — stesso formato gia' prodotto da preprocessing
-        # e OCR (letto da app/progresso.py:estrai_progresso_da_log per la
-        # barra di avanzamento): prima mancava del tutto per questa fase,
-        # quindi la percentuale in webapp restava ferma per tutta la sua
-        # durata invece di avanzare ricetta per ricetta.
-        print(f"[{idx}/{len(json_files)}] {json_path.name}")
         try:
             dati = json.loads(json_path.read_text(encoding="utf-8-sig"))
             diffs = analizza_riga(dati)
@@ -1267,6 +1291,13 @@ def elabora_cartella(cartella: Path):
         except Exception as e:
             n_errori += 1
             print(f"  {json_path.name}: ERRORE - {e}")
+        # Contatore "[i/N]" — stesso formato gia' prodotto da preprocessing
+        # e OCR (letto da app/progresso.py:estrai_progresso_da_log per la
+        # barra di avanzamento), stampato a fine elaborazione della singola
+        # ricetta e non all'inizio: la percentuale deve arrivare al tetto
+        # della fase solo quando l'ULTIMA ricetta ha davvero finito, non
+        # quando e' solo iniziata.
+        print(f"[{idx}/{len(json_files)}] {json_path.name}")
 
     n_tot = len(json_files)
     print(f"\n{'='*50}")

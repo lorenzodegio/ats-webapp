@@ -32,37 +32,63 @@ def radice_sharepoint() -> Path:
     for Business sincronizzata sulla macchina ATS (Configurazione.sharepoint_base_path),
     altrimenti SHAREPOINT_FINTO (sviluppo, macchine senza OneDrive).
 
-    Letta una sola volta e messa in cache di processo: oggi non esiste
-    ancora un modo per cambiare sharepoint_base_path mentre il server e'
-    in esecuzione (tab "Sistema" di Impostazioni e' sola lettura), quindi
-    non c'e' bisogno di rileggerla ad ogni chiamata — solo di non fallire
-    se la tabella Configurazione non e' ancora popolata (DB appena creato,
-    prima di seed_admin.py).
+    Il percorso risolto viene messo in cache di processo SOLO una volta
+    trovato valido: a quel punto non ha senso rileggerlo ad ogni chiamata
+    (tab "Sistema" di Impostazioni e' sola lettura, quindi non cambia a
+    server in esecuzione). Ma se al momento della risoluzione la cartella
+    OneDrive non e' ancora disponibile (es. OneDrive non ha ancora montato
+    la sincronizzazione all'avvio del server), NON mettiamo in cache il
+    fallback SHAREPOINT_FINTO: altrimenti un intero lotto, anche lungo
+    giorni, finirebbe scritto silenziosamente nella cartella finta locale
+    invece che su SharePoint, senza modo di riprendersi finche' il
+    processo non viene riavviato (bug reale riscontrato il 2026-10-02:
+    lotto DICEMBRE scritto per intero in sharepoint_finto/ perche' il
+    server era partito prima che OneDrive montasse la cartella).
     """
-    if "percorso" not in _CACHE_RADICE_SHAREPOINT:
-        percorso = None
+    percorso = None
+    try:
+        from app.database import SessionLocal
+        from app.models import Configurazione
+        db = SessionLocal()
         try:
-            from app.database import SessionLocal
-            from app.models import Configurazione
-            db = SessionLocal()
-            try:
-                riga = db.query(Configurazione).filter(Configurazione.chiave == "sharepoint_base_path").first()
-                if riga and riga.valore and riga.valore.strip():
-                    candidato = Path(riga.valore.strip())
-                    if candidato.is_dir():
-                        percorso = candidato
-            finally:
-                db.close()
-        except Exception:
-            percorso = None
-        _CACHE_RADICE_SHAREPOINT["percorso"] = percorso or SHAREPOINT_FINTO
-    return _CACHE_RADICE_SHAREPOINT["percorso"]
+            riga = db.query(Configurazione).filter(Configurazione.chiave == "sharepoint_base_path").first()
+            if riga and riga.valore and riga.valore.strip():
+                candidato = Path(riga.valore.strip())
+                if candidato.is_dir():
+                    percorso = candidato
+        finally:
+            db.close()
+    except Exception:
+        percorso = None
+
+    if percorso is not None:
+        _CACHE_RADICE_SHAREPOINT["percorso"] = percorso
+        return percorso
+    return _CACHE_RADICE_SHAREPOINT.get("percorso") or SHAREPOINT_FINTO
 
 
 def nome_file_sicuro(testo: str, default: str = "output") -> str:
     """Nome di file/cartella sicuro da un testo libero (es. lotto.nome)."""
     pulito = re.sub(r"[^a-zA-Z0-9_\-\s]", "", testo or "").strip().replace(" ", "_")
     return pulito or default
+
+
+def nome_cartella_farmacia(nome_farmacia) -> str:
+    """
+    Nome di cartella sicuro per raggruppare le prescrizioni per farmacia
+    (export ZIP, PRESCRIZIONI su SharePoint). Valori vuoti o gia'
+    "FARMACIA_SCONOSCIUTA" (sentinella di merge_regione.py quando
+    FARMACIA_ID non ha match in Regione, vedi DatiOcr.nome_farmacia)
+    finiscono tutti nella stessa cartella "FARMACIA_SCONOSCIUTA".
+    "OCR_INCERTO" e' qui solo per compatibilita' con JSON scritti da
+    versioni precedenti di merge_regione.py, prima che il nome del
+    sentinel fosse corretto (l'OCR non ha mai avuto un ruolo nella scelta
+    del nome farmacia, "OCR_INCERTO" era un nome fuorviante ereditato dal
+    pattern usato per le date).
+    """
+    if not nome_farmacia or str(nome_farmacia).strip() in ("FARMACIA_SCONOSCIUTA", "OCR_INCERTO"):
+        return "FARMACIA_SCONOSCIUTA"
+    return nome_file_sicuro(nome_farmacia, default="FARMACIA_SCONOSCIUTA")
 
 
 def cartella_originale_lotto(lotto_id) -> Path:

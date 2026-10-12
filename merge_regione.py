@@ -28,6 +28,8 @@ from collections import Counter
 
 import pandas as pd
 
+from farmacie_dizionario import nome_da_farmacia_id
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("MergeRegione")
 
@@ -107,6 +109,15 @@ def trova_colonna_data_prescrizione(df: pd.DataFrame) -> str:
             (c for c in df.columns if "presc" in c.lower() and "data" in c.lower()),
             None
         )
+    return col
+
+
+def trova_colonna_farmacia_id(df: pd.DataFrame) -> str:
+    """Cerca la colonna FARMACIA_ID nel file Regione (stesso nome usato in phase4_excel.py)."""
+    possibili = ["FARMACIA_ID", "FarmaciaID", "Farmacia_ID"]
+    col = next((c for c in possibili if c in df.columns), None)
+    if not col:
+        col = next((c for c in df.columns if "farmacia" in c.lower() and "id" in c.lower()), None)
     return col
 
 
@@ -245,9 +256,44 @@ def sostituisci_data_con_regione(dati: dict, campo: str, valore_regione: str, js
     return dati
 
 
+def sostituisci_nome_farmacia_con_regione(dati: dict, nome_regione, json_name: str) -> dict:
+    """
+    Il nome della farmacia viene preso ESCLUSIVAMENTE dal FARMACIA_ID
+    dell'Excel Regione (via farmacie_dizionario.nome_da_farmacia_id) —
+    nessuna lettura OCR del timbro/etichetta viene mai usata come valore
+    finale, nemmeno come ripiego. A differenza delle date
+    (sostituisci_data_con_regione), qui non ha senso parlare di "OCR
+    incerto": l'OCR non entra proprio nella decisione, quindi con
+    FARMACIA_ID assente/non mappato il campo diventa "FARMACIA_SCONOSCIUTA"
+    (stesso valore gia' usato come fallback per il raggruppamento delle
+    prescrizioni per farmacia, vedi app/storage.py:nome_cartella_farmacia),
+    non un finto valore OCR.
+    """
+    valore_attuale = dati.get("nome_farmacia", "")
+
+    if not nome_regione:
+        if valore_attuale != "FARMACIA_SCONOSCIUTA":
+            log.warning(
+                f"  {json_name}: FARMACIA_ID Regione assente o non mappato in anagrafica — "
+                f"valore OCR di nome_farmacia ({valore_attuale!r}) NON utilizzato, campo marcato FARMACIA_SCONOSCIUTA"
+            )
+        dati["nome_farmacia"] = "FARMACIA_SCONOSCIUTA"
+        dati["nome_farmacia_da_regione"] = False
+        return dati
+
+    if valore_attuale != nome_regione:
+        log.info(f"  {json_name}: nome_farmacia preso da Regione ('{nome_regione}', valore OCR era {valore_attuale!r})")
+    else:
+        log.info(f"  {json_name}: nome_farmacia gia' combaciava con Regione ('{nome_regione}')")
+
+    dati["nome_farmacia"] = nome_regione
+    dati["nome_farmacia_da_regione"] = True
+    return dati
+
+
 def arricchisci_json(json_path: Path, df_regione: pd.DataFrame,
                       col_cf: str, col_lordo: str, col_data_presc: str, col_data_sped: str,
-                      contatore_barcode: Counter) -> dict:
+                      col_farmacia_id: str, contatore_barcode: Counter) -> dict:
     """
     Arricchisce un singolo JSON con i dati Regione corrispondenti,
     trovati tramite match sul barcode.
@@ -260,6 +306,7 @@ def arricchisci_json(json_path: Path, df_regione: pd.DataFrame,
         dati["COD_FISCALE"] = ""
         dati["CONTROLLO_CODICE_PRESCRIZIONE"] = "false"
         dati["LORDO_PRESC"] = ""
+        dati = sostituisci_nome_farmacia_con_regione(dati, None, json_path.name)
         return dati
 
     match = df_regione[df_regione["_barcode_norm"] == barcode]
@@ -269,11 +316,18 @@ def arricchisci_json(json_path: Path, df_regione: pd.DataFrame,
         dati["COD_FISCALE"] = ""
         dati["CONTROLLO_CODICE_PRESCRIZIONE"] = "false"
         dati["LORDO_PRESC"] = ""
+        dati = sostituisci_nome_farmacia_con_regione(dati, None, json_path.name)
         return dati
 
     riga = match.iloc[0]
     dati["COD_FISCALE"] = "" if not col_cf or pd.isna(riga[col_cf]) else str(riga[col_cf])
     dati["LORDO_PRESC"] = "" if not col_lordo or pd.isna(riga[col_lordo]) else str(riga[col_lordo])
+
+    farmacia_id_regione = "" if not col_farmacia_id or pd.isna(riga[col_farmacia_id]) else str(riga[col_farmacia_id]).strip()
+    nome_regione = nome_da_farmacia_id(farmacia_id_regione) if farmacia_id_regione else None
+    if farmacia_id_regione and not nome_regione:
+        log.warning(f"  {json_path.name}: FARMACIA_ID Regione '{farmacia_id_regione}' non trovato in anagrafica farmacie")
+    dati = sostituisci_nome_farmacia_con_regione(dati, nome_regione, json_path.name)
 
     # Duplicato se il barcode compare piu' di una volta nel file Regione
     n_occorrenze = contatore_barcode.get(barcode, 0)
@@ -316,6 +370,12 @@ def run(excel_path: Path, output_dir: Path):
     else:
         log.info(f"Colonna LORDO_PRESC identificata: '{col_lordo}'")
 
+    col_farmacia_id = trova_colonna_farmacia_id(df_regione)
+    if not col_farmacia_id:
+        log.warning("Colonna FARMACIA_ID non trovata in Regione — nome_farmacia sara' sempre FARMACIA_SCONOSCIUTA")
+    else:
+        log.info(f"Colonna FARMACIA_ID identificata: '{col_farmacia_id}'")
+
     col_data_presc = trova_colonna_data_prescrizione(df_regione)
     if not col_data_presc:
         log.warning(
@@ -348,12 +408,13 @@ def run(excel_path: Path, output_dir: Path):
     log.info(f"Arricchimento di {len(json_files)} ricette con dati Regione...")
 
     aggiornati = 0
-    da_regione = {"data_prescrizione": 0, "data_emissione": 0}
-    mancanti_regione = {"data_prescrizione": 0, "data_emissione": 0}
+    da_regione = {"data_prescrizione": 0, "data_emissione": 0, "nome_farmacia": 0}
+    mancanti_regione = {"data_prescrizione": 0, "data_emissione": 0, "nome_farmacia": 0}
     for json_path in json_files:
         try:
             dati_arricchiti = arricchisci_json(
-                json_path, df_regione, col_cf, col_lordo, col_data_presc, col_data_sped, contatore_barcode
+                json_path, df_regione, col_cf, col_lordo, col_data_presc, col_data_sped,
+                col_farmacia_id, contatore_barcode
             )
             for campo in da_regione:
                 if dati_arricchiti.get(f"{campo}_da_regione"):
@@ -373,6 +434,8 @@ def run(excel_path: Path, output_dir: Path):
         log.info(f"data_prescrizione presa da Regione: {da_regione['data_prescrizione']} — rimasta su valore OCR (Regione non disponibile): {mancanti_regione['data_prescrizione']}")
     if col_data_sped:
         log.info(f"data_emissione presa da Regione: {da_regione['data_emissione']} — rimasta su valore OCR (Regione non disponibile): {mancanti_regione['data_emissione']}")
+    if col_farmacia_id:
+        log.info(f"nome_farmacia preso da Regione: {da_regione['nome_farmacia']} — marcato FARMACIA_SCONOSCIUTA (FARMACIA_ID assente/non mappato): {mancanti_regione['nome_farmacia']}")
 
 
 def main():

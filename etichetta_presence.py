@@ -38,6 +38,61 @@ AVVERTENZE_PATTERN = re.compile(r"avvertenz", re.IGNORECASE)
 DATA_PREP_PATTERN = re.compile(r"\bprep\.?\b|preparazion", re.IGNORECASE)
 DATA_SCADENZA_PATTERN = re.compile(r"scaden|utilizzare\s*entro", re.IGNORECASE)
 
+
+def _distanza_levenshtein(a: str, b: str) -> int:
+    """Stessa implementazione già usata altrove nel progetto (date_corrector.py,
+    phase5_difformita.py) — duplicata qui per non introdurre una dipendenza
+    tra moduli."""
+    if a == b:
+        return 0
+    len_a, len_b = len(a), len(b)
+    if len_a == 0:
+        return len_b
+    if len_b == 0:
+        return len_a
+    riga_prec = list(range(len_b + 1))
+    for i, ca in enumerate(a, 1):
+        riga_corr = [i] + [0] * len_b
+        for j, cb in enumerate(b, 1):
+            costo = 0 if ca == cb else 1
+            riga_corr[j] = min(riga_corr[j - 1] + 1, riga_prec[j] + 1, riga_prec[j - 1] + costo)
+        riga_prec = riga_corr
+    return riga_prec[len_b]
+
+
+def _testo_contiene_parola_simile(testo: str, parole_chiave: list, tolleranza_rapporto: float = 0.3) -> bool:
+    """Confronto fuzzy parola-per-parola (tollera refusi OCR su 1-2 lettere),
+    stesso principio di _testo_contiene_parola_simile in phase5_difformita.py."""
+    parole_testo = re.findall(r"[A-Za-zÀ-ÿ]+", testo.upper())
+    for chiave in parole_chiave:
+        chiave = chiave.upper()
+        soglia = max(1, int(len(chiave) * tolleranza_rapporto))
+        for parola in parole_testo:
+            if abs(len(parola) - len(chiave)) <= soglia and _distanza_levenshtein(parola, chiave) <= soglia:
+                return True
+    return False
+
+
+# Alcune farmacie non usano una piccola etichetta adesiva incollata sopra il
+# modulo CODICE/NUMERO (il caso su cui è calibrato il template crop_vuoto_v2.png
+# e i pattern NOME_PATTERN/AVVERTENZE_PATTERN/ecc. sopra), ma stampano
+# l'intera "etichetta" come un modulo integrato, strutturalmente molto
+# diverso dal template — osservato concretamente su un campione reale di 23
+# ricette della Farmacia Pomi di dr. Collivasone A. & C. Snc ("FARMACIA DI
+# AVIGNO" / "FARMACIE POMI S.N.C."): SSIM sempre basso (0.37-0.53, mai nella
+# fascia "chiaramente vuoto") ma il fallback OCR falliva SEMPRE comunque,
+# perché EasyOCR legge "Dott."/"Sig."/"Prep." con refusi (es. "Dout", "Slg")
+# che non combaciano con NOME_PATTERN/DATA_PREP_PATTERN — con 23/23 falsi
+# "etichetta assente" nonostante l'etichetta fosse sempre visibilmente
+# presente. Per QUESTE farmacie, in aggiunta ai pattern generici, si cerca
+# anche il nome/intestazione della farmacia stessa (stampato in modo molto
+# più leggibile e costante di "Dott."/"Sig." su queste etichette) con
+# tolleranza fuzzy — NON si tocca il comportamento per nessun'altra farmacia,
+# che continua a usare solo i pattern generici sopra.
+PAROLE_ANCORA_EXTRA_PER_FARMACIA = {
+    "Farmacia Pomi di dr. Collivasone A. & C. Snc": ["AVIGNO", "POMI"],
+}
+
 # Soglie da calibrare su un campione reale (vedi note in fondo al file)
 SSIM_EMPTY_THRESHOLD = 0.85   # sopra questo valore: quasi certamente vuoto
 SSIM_PRESENT_THRESHOLD = 0.55  # sotto questo valore: quasi certamente etichetta presente
@@ -74,7 +129,7 @@ def find_template_region(page_gray: np.ndarray, template_gray: np.ndarray, searc
     return (x, y, w, h), max_val
 
 
-def ocr_fallback(region_bgr: np.ndarray, reader) -> bool:
+def ocr_fallback(region_bgr: np.ndarray, reader, nome_farmacia: str = "") -> bool:
     """Usato solo se SSIM è ambiguo/basso. Cerca gli STESSI ancoraggi già
     usati per l'estrazione dei campi etichetta (prezzi, THC, nomi
     paziente/medico, avvertenze, data preparazione, data scadenza) —
@@ -88,7 +143,14 @@ def ocr_fallback(region_bgr: np.ndarray, reader) -> bool:
     concretamente su un caso reale (Farmacia Tili, Vismara) dove quel
     numero, non l'etichetta, faceva scattare "presente" per errore.
     Non è un segnale specifico dell'etichetta, quindi non va usato qui.
+
+    nome_farmacia: se valorizzato e presente in PAROLE_ANCORA_EXTRA_PER_FARMACIA,
+    aggiunge un controllo fuzzy sul nome/intestazione di QUELLA farmacia come
+    ulteriore ancoraggio — vedi commento sopra PAROLE_ANCORA_EXTRA_PER_FARMACIA.
+    Per ogni altra farmacia (valore di default "") il comportamento è
+    identico a prima, nessuna modifica.
     """
+    parole_extra = PAROLE_ANCORA_EXTRA_PER_FARMACIA.get(nome_farmacia)
     results = reader.readtext(region_bgr)
     for _, text, conf in results:
         if conf < 0.4:
@@ -97,11 +159,14 @@ def ocr_fallback(region_bgr: np.ndarray, reader) -> bool:
                 or NOME_PATTERN.search(text) or AVVERTENZE_PATTERN.search(text)
                 or DATA_PREP_PATTERN.search(text) or DATA_SCADENZA_PATTERN.search(text)):
             return True
+        if parole_extra and _testo_contiene_parola_simile(text, parole_extra):
+            return True
     return False
 
 
 def detect_etichetta_from_images(page_gray: np.ndarray, template_gray: np.ndarray, reader=None,
-                                  search_region_frac=(0.5, 1.0), page_bgr: np.ndarray = None) -> EtichettaResult:
+                                  search_region_frac=(0.5, 1.0), page_bgr: np.ndarray = None,
+                                  nome_farmacia: str = "") -> EtichettaResult:
     """Versione core: lavora direttamente su array numpy già in memoria.
 
     Usata sia da detect_etichetta() (che carica da file) sia da ocr_cannabis.py
@@ -110,6 +175,11 @@ def detect_etichetta_from_images(page_gray: np.ndarray, template_gray: np.ndarra
     page_bgr: immagine a colori originale (stesso frame di page_gray). Necessaria
     SOLO se si vuole il fallback OCR nella zona grigia — se non fornita e la
     confidenza cade nella zona ambigua, il risultato resta "bassa" invece di "media".
+
+    nome_farmacia: nome canonico della farmacia (se già noto da Regione a questo
+    punto), inoltrato a ocr_fallback() per l'ancoraggio extra opzionale — vedi
+    PAROLE_ANCORA_EXTRA_PER_FARMACIA. Stringa vuota = nessun cambiamento rispetto
+    a prima per qualunque farmacia non in quella mappa.
     """
     (x, y, w, h), match_score = find_template_region(page_gray, template_gray, search_region_frac)
     region_gray = page_gray[y:y + h, x:x + w]
@@ -153,7 +223,7 @@ def detect_etichetta_from_images(page_gray: np.ndarray, template_gray: np.ndarra
             y_start = int(page_h * search_region_frac[0])
             y_end = int(page_h * search_region_frac[1])
             region_bgr = page_bgr[y_start:y_end, :]
-            ocr_hit = ocr_fallback(region_bgr, reader)
+            ocr_hit = ocr_fallback(region_bgr, reader, nome_farmacia=nome_farmacia)
             if ocr_hit:
                 return EtichettaResult(True, "alta", score, (x, y, w, h), "struttura molto diversa dal template, confermata da pattern OCR")
             return EtichettaResult(False, "media", score, (x, y, w, h), "struttura diversa dal template ma NESSUN pattern OCR trovato — probabile modulo vuoto di layout diverso dal template di calibrazione, non un'etichetta vera")
@@ -170,7 +240,7 @@ def detect_etichetta_from_images(page_gray: np.ndarray, template_gray: np.ndarra
         y_start = int(page_h * search_region_frac[0])
         y_end = int(page_h * search_region_frac[1])
         region_bgr = page_bgr[y_start:y_end, :]
-        ocr_hit = ocr_fallback(region_bgr, reader)
+        ocr_hit = ocr_fallback(region_bgr, reader, nome_farmacia=nome_farmacia)
         if ocr_hit:
             return EtichettaResult(True, "media", score, (x, y, w, h), "SSIM ambiguo, ma pattern OCR trovati nella fascia inferiore")
         return EtichettaResult(False, "media", score, (x, y, w, h), "SSIM ambiguo, nessun pattern OCR trovato nella fascia inferiore")
@@ -178,7 +248,8 @@ def detect_etichetta_from_images(page_gray: np.ndarray, template_gray: np.ndarra
     return EtichettaResult(True, "bassa", score, (x, y, w, h), "SSIM ambiguo, nessun fallback OCR disponibile")
 
 
-def detect_etichetta(page_path: str, template_path: str, reader=None, search_region_frac=(0.5, 1.0)) -> EtichettaResult:
+def detect_etichetta(page_path: str, template_path: str, reader=None, search_region_frac=(0.5, 1.0),
+                      nome_farmacia: str = "") -> EtichettaResult:
     """Wrapper da riga di comando: carica le immagini da file e richiama la funzione core."""
     page = cv2.imread(page_path)
     template = cv2.imread(template_path)
@@ -189,6 +260,7 @@ def detect_etichetta(page_path: str, template_path: str, reader=None, search_reg
     return detect_etichetta_from_images(
         page_gray, template_gray, reader=reader,
         search_region_frac=search_region_frac, page_bgr=page,
+        nome_farmacia=nome_farmacia,
     )
 
 

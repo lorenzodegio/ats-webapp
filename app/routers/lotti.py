@@ -29,6 +29,7 @@ from app.models import (
 )
 from app.storage import (
     MEDIA_ROOT,
+    nome_cartella_farmacia,
     nome_file_sicuro,
     percorso_pdf_prescrizione as _percorso_pdf_prescrizione,
     radice_sharepoint,
@@ -853,12 +854,7 @@ def export_zip(
             da_includere = [(p, c) for p, c in da_includere if c]
         gruppi_farmacia = {}
         for p, _conf in da_includere:
-            nome_farmacia = "FARMACIA_SCONOSCIUTA"
-            if p.dati_ocr and p.dati_ocr.nome_farmacia:
-                nome_farmacia = p.dati_ocr.nome_farmacia.strip()
-            nome_cartella = re.sub(r'[^a-zA-Z0-9_\-\s]', '', nome_farmacia).strip().replace(" ", "_")
-            if not nome_cartella:
-                nome_cartella = "FARMACIA_SCONOSCIUTA"
+            nome_cartella = nome_cartella_farmacia(p.dati_ocr.nome_farmacia if p.dati_ocr else None)
             if nome_cartella not in gruppi_farmacia:
                 gruppi_farmacia[nome_cartella] = []
             gruppi_farmacia[nome_cartella].append(p)
@@ -1215,6 +1211,6 @@ def stato_lotto(lotto_id: str, db: Session = Depends(get_db), utente: Utente = D
         "progresso_item": progresso_item,
         "n_prescrizioni_totali": lotto.n_prescrizioni_totali,
         "n_barcode_undefined": lotto.n_barcode_undefined,
-        "n_difformita_totali": lotto.n_difformita_totali,
+        "n_difformita_totali": lotto.n_difformita_confermate,
         "log_righe": log_righe,
     }

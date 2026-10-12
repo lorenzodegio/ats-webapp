@@ -34,7 +34,12 @@ finally:
 app = FastAPI(title="ATS Gestione Prescrizioni Cannabis")
 
 SECRET_KEY = os.environ.get("SESSION_SECRET_KEY", "cambia-questa-chiave-in-produzione")
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax")
+# max_age=None (invece del default Starlette di 14 giorni): il cookie di
+# sessione non ha piu' un attributo di scadenza, quindi il browser lo
+# scarta alla chiusura completa (non alla chiusura di una singola scheda)
+# — senza login persiste per 14 giorni anche chiudendo l'app, con questo
+# richiede l'accesso ogni volta che il browser viene chiuso del tutto.
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", max_age=None)
 
 
 @app.middleware("http")

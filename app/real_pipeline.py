@@ -57,6 +57,7 @@ from app.storage import (
     RICETTE_STAGING_IMAGES,
     RICETTE_STAGING_PDFS,
     cartella_pagine_lotto,
+    nome_cartella_farmacia,
     nome_file_sicuro,
     pdf_originali_lotto,
     percorso_pdf_prescrizione,
@@ -69,8 +70,9 @@ from app.storage import (
 from app.models import (
     LottoMensile, StatoLotto, Elaborazione, FaseElaborazione, StatoElaborazione,
     LogElaborazione, LivelloLog, Prescrizione, StatoBarcode, DatiOcr,
-    Difformita, StatoDifformita,
+    Difformita, StatoDifformita, DecisioneEtichettaMancante,
 )
+from app.notifiche_email import notifica_fase_completata, notifica_errore
 
 log = logging.getLogger("RealPipeline")
 
@@ -536,22 +538,71 @@ def _copia_lotto_verso_dati(lotto: LottoMensile) -> None:
 
 def _pubblica_prescrizioni_su_sharepoint(lotto: LottoMensile) -> int:
     """
-    Copia le ricette gia' estratte dal preprocessing (una per barcode,
-    RICETTE = /dati/ricette dentro il container) nella cartella
-    PRESCRIZIONI dello storage permanente del lotto — NON il PDF combinato
-    caricato in origine (quello serve solo come input alla pipeline).
-    Un operatore/farmacia che apre PRESCRIZIONI deve trovare le singole
-    ricette, non un unico PDF multi-pagina da scorrere a mano.
+    Copia le ricette gia' estratte dal preprocessing nella cartella
+    PRESCRIZIONI dello storage permanente del lotto — sia quelle con
+    barcode letto correttamente (RICETTE = /dati/ricette dentro il
+    container) SIA quelle con barcode non riconosciuto, ancora in attesa
+    di correzione manuale (RICETTE_STAGING_PDFS = /dati/ricette_staging/
+    pdfs, nominate "undefined_N.pdf"): un operatore/farmacia che apre
+    PRESCRIZIONI deve trovare TUTTE le ricette del lotto, non solo
+    quelle lette bene — le "undefined_N.pdf" vengono poi rinominate col
+    barcode vero non appena l'operatore le corregge (vedi
+    correggi_barcode_reale). NON il PDF combinato caricato in origine
+    (quello serve solo come input alla pipeline).
     """
     if not lotto.sp_prescrizioni_path:
         return 0
     cartella = radice_sharepoint() / lotto.sp_prescrizioni_path
     cartella.mkdir(parents=True, exist_ok=True)
     n = 0
-    for pdf in RICETTE.glob("*.pdf"):
-        shutil.copy2(pdf, cartella / pdf.name)
-        n += 1
+    for sorgente in (RICETTE, RICETTE_STAGING_PDFS):
+        if not sorgente.is_dir():
+            continue
+        for pdf in sorgente.glob("*.pdf"):
+            shutil.copy2(pdf, cartella / pdf.name)
+            n += 1
     return n
+
+
+def _raggruppa_prescrizioni_per_farmacia_su_sharepoint(lotto: LottoMensile) -> int:
+    """
+    _pubblica_prescrizioni_su_sharepoint (sopra) pubblica i PDF FLAT in
+    PRESCRIZIONI durante il preprocessing — a quel punto nome_farmacia
+    non esiste ancora (viene determinato solo dall'OCR/merge_regione.py,
+    fase successiva). Chiamata a fine avvia_ocr_reale, quando
+    DatiOcr.nome_farmacia e' finalmente noto per ogni prescrizione:
+    sposta ciascun PDF gia' pubblicato in una sottocartella per farmacia
+    (PRESCRIZIONI/<FARMACIA>/<barcode>.pdf), stesso raggruppamento gia'
+    usato per l'export ZIP (vedi nome_cartella_farmacia in app/storage.py).
+
+    Best-effort riga per riga: un problema su una singola prescrizione
+    (barcode assente, file gia' spostato da un run precedente...) non
+    blocca le altre.
+    """
+    if not lotto.sp_prescrizioni_path:
+        return 0
+    cartella_prescrizioni = radice_sharepoint() / lotto.sp_prescrizioni_path
+    if not cartella_prescrizioni.is_dir():
+        return 0
+
+    spostate = 0
+    for presc in lotto.prescrizioni:
+        if not presc.barcode:
+            continue
+        origine = cartella_prescrizioni / f"{presc.barcode}.pdf"
+        if not origine.is_file():
+            continue
+        nome_farmacia = presc.dati_ocr.nome_farmacia if presc.dati_ocr else None
+        cartella_farmacia = cartella_prescrizioni / nome_cartella_farmacia(nome_farmacia)
+        try:
+            cartella_farmacia.mkdir(parents=True, exist_ok=True)
+            destinazione = cartella_farmacia / origine.name
+            if not destinazione.exists():
+                shutil.move(str(origine), str(destinazione))
+            spostate += 1
+        except OSError:
+            log.exception(f"Impossibile spostare {origine.name} nella cartella farmacia su SharePoint")
+    return spostate
 
 
 def avvia_preprocessing_reale(lotto_id) -> None:
@@ -627,6 +678,7 @@ def avvia_preprocessing_reale(lotto_id) -> None:
         lotto.stato = StatoLotto.revisione_barcode
         log_elaborazione(db, elaborazione, f"Preprocessing completato: {n_letti} barcode letti, {n_undefined} da rivedere")
         db.commit()
+        notifica_fase_completata(lotto, "preprocessing")
 
     except ElaborazioneAnnullata:
         _gestisci_annullamento(db, lotto_id, elaborazione)
@@ -641,6 +693,8 @@ def avvia_preprocessing_reale(lotto_id) -> None:
             lotto.stato = StatoLotto.eccezione
             lotto.note = ((lotto.note or "") + f"\n[{datetime.utcnow():%d/%m %H:%M}] Preprocessing: {exc}").strip()
         db.commit()
+        if lotto:
+            notifica_errore(lotto, "preprocessing")
     finally:
         db.close()
 
@@ -650,7 +704,12 @@ def correggi_barcode_reale(prescrizione_id, nuovo_barcode: str) -> None:
     Oltre ad aggiornare il DB, sposta per davvero il file dalla cartella
     di staging (ricette_staging/pdfs/undefined_*.pdf) a ./dati/ricette/,
     rinominandolo col barcode corretto — altrimenti la fase OCR
-    successiva (che legge da ricette_dir) non lo troverebbe.
+    successiva (che legge da ricette_dir) non lo troverebbe. Rinomina
+    anche la copia gia' pubblicata su SharePoint in PRESCRIZIONI (ci
+    era finita come "undefined_N.pdf" subito dopo il preprocessing, vedi
+    _pubblica_prescrizioni_su_sharepoint) — altrimenti chi apre quella
+    cartella continuerebbe a trovare il nome segnaposto invece del
+    barcode vero.
     """
     db: Session = SessionLocal()
     try:
@@ -676,6 +735,20 @@ def correggi_barcode_reale(prescrizione_id, nuovo_barcode: str) -> None:
                 presc.sp_pdf_path = pubblica_file(presc.lotto_id, destinazione)
             if png_media.is_file():
                 presc.sp_png_path = relativo_a_radice(png_media)
+
+            lotto = db.query(LottoMensile).filter(LottoMensile.id == presc.lotto_id).first()
+            if lotto and lotto.sp_prescrizioni_path:
+                cartella_prescrizioni = radice_sharepoint() / lotto.sp_prescrizioni_path
+                vecchio_su_sp = cartella_prescrizioni / f"{vecchio_stem}.pdf"
+                nuovo_su_sp = cartella_prescrizioni / f"{nuovo_barcode}.pdf"
+                try:
+                    if vecchio_su_sp.is_file():
+                        shutil.move(str(vecchio_su_sp), str(nuovo_su_sp))
+                    elif destinazione.exists() and not nuovo_su_sp.exists():
+                        cartella_prescrizioni.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(destinazione, nuovo_su_sp)
+                except OSError:
+                    log.exception("Impossibile aggiornare la copia su SharePoint dopo la correzione barcode")
 
         presc.barcode = nuovo_barcode
         presc.stato_barcode = StatoBarcode.corretto_manuale
@@ -754,6 +827,10 @@ def avvia_ocr_reale(lotto_id) -> None:
         lotto.score_ocr_medio = round(sum(scores) / len(scores), 2) if scores else None
         lotto.updated_at = datetime.utcnow()
 
+        n_raggruppate = _raggruppa_prescrizioni_per_farmacia_su_sharepoint(lotto)
+        if n_raggruppate:
+            log_elaborazione(db, elaborazione, f"{n_raggruppate} ricette raggruppate per farmacia in PRESCRIZIONI su SharePoint")
+
         elaborazione.stato = StatoElaborazione.completata
         elaborazione.finished_at = datetime.utcnow()
         elaborazione.exit_code = 0
@@ -762,6 +839,7 @@ def avvia_ocr_reale(lotto_id) -> None:
         lotto.stato = StatoLotto.revisione_qualita
         log_elaborazione(db, elaborazione, f"OCR completato: {n_processati} prescrizioni elaborate, {n_match} con match Regione")
         db.commit()
+        notifica_fase_completata(lotto, "ocr")
 
     except ElaborazioneAnnullata:
         _gestisci_annullamento(db, lotto_id, elaborazione)
@@ -776,6 +854,8 @@ def avvia_ocr_reale(lotto_id) -> None:
             lotto.stato = StatoLotto.eccezione
             lotto.note = ((lotto.note or "") + f"\n[{datetime.utcnow():%d/%m %H:%M}] OCR: {exc}").strip()
         db.commit()
+        if lotto:
+            notifica_errore(lotto, "ocr")
     finally:
         db.close()
 
@@ -964,6 +1044,7 @@ def avvia_difformita_reale(lotto_id) -> None:
         lotto.stato = StatoLotto.revisione_difformita
         log_elaborazione(db, elaborazione, f"Analisi completata: {n_difformita_totali} difformita su {n_con_difformita} prescrizioni")
         db.commit()
+        notifica_fase_completata(lotto, "difformita")
 
     except ElaborazioneAnnullata:
         _gestisci_annullamento(db, lotto_id, elaborazione)
@@ -978,6 +1059,8 @@ def avvia_difformita_reale(lotto_id) -> None:
             lotto.stato = StatoLotto.eccezione
             lotto.note = ((lotto.note or "") + f"\n[{datetime.utcnow():%d/%m %H:%M}] Difformita: {exc}").strip()
         db.commit()
+        if lotto:
+            notifica_errore(lotto, "difformita")
     finally:
         db.close()
 
@@ -1098,6 +1181,72 @@ def _evidenzia_difformita_escluse(destinazione: Path, db: Session, lotto: LottoM
         log.exception("Impossibile evidenziare le difformita' escluse nell'Excel finale (il file resta comunque salvato)")
 
 
+def _correggi_etichetta_mancante_esclusa(destinazione: Path, db: Session, lotto: LottoMensile) -> None:
+    """
+    La colonna ETICHETTA MANCANTE dell'Excel finale viene calcolata da
+    phase4_excel.py in base alla presenza congiunta delle difformita'
+    R11+R12+R13+R16 nel JSON (vedi _riga_da_difformita) — non sa nulla
+    della decisione esplicita dell'operatore quando, nella card di
+    sospetto "possibile etichetta mancante", preme "Escludi: etichetta
+    presente" (POST /lotti/{id}/prescrizioni/{id}/etichetta-mancante,
+    azione=escludi, salvata solo nel database come
+    Prescrizione.decisione_etichetta_mancante=esclusa — un falso allarme
+    della pipeline, l'etichetta c'e' davvero).
+
+    Qui, dopo che l'Excel e' stato scritto, si forza a "Falso" la cella
+    ETICHETTA MANCANTE di quelle prescrizioni, evidenziata in giallo
+    (stesso colore delle correzioni manuali OCR in
+    _evidenzia_campi_corretti) per segnalare che e' un valore corretto a
+    mano e non quello calcolato automaticamente dalla pipeline.
+    """
+    prescrizioni_escluse = (
+        db.query(Prescrizione)
+        .filter(
+            Prescrizione.lotto_id == lotto.id,
+            Prescrizione.decisione_etichetta_mancante == DecisioneEtichettaMancante.esclusa,
+        )
+        .all()
+    )
+    if not prescrizioni_escluse:
+        return
+    try:
+        wb = openpyxl.load_workbook(destinazione)
+        ws = wb.active
+        intestazione = {}
+        for col_idx in range(1, ws.max_column + 1):
+            nome = ws.cell(row=1, column=col_idx).value
+            if nome:
+                intestazione[nome] = col_idx
+        col_barcode = intestazione.get("BARCODE")
+        col_etichetta_mancante = intestazione.get("ETICHETTA MANCANTE")
+        if not col_barcode or not col_etichetta_mancante:
+            return
+
+        riga_per_barcode = {}
+        for riga in range(2, ws.max_row + 1):
+            valore = ws.cell(row=riga, column=col_barcode).value
+            if valore:
+                riga_per_barcode[re.sub(r"[^0-9A-Za-z]", "", str(valore))] = riga
+
+        sfondo_corretto = PatternFill(fgColor="FFFFF3B0", fill_type="solid")
+
+        corrette = 0
+        for presc in prescrizioni_escluse:
+            barcode_norm = re.sub(r"[^0-9A-Za-z]", "", (presc.barcode or ""))
+            riga = riga_per_barcode.get(barcode_norm)
+            if not riga:
+                continue
+            cella = ws.cell(row=riga, column=col_etichetta_mancante)
+            cella.value = "Falso"
+            cella.fill = sfondo_corretto
+            corrette += 1
+        if corrette:
+            wb.save(destinazione)
+            log.info(f"Forzato 'Falso' su ETICHETTA MANCANTE per {corrette} prescrizioni (decisione operatore)")
+    except Exception:
+        log.exception("Impossibile correggere ETICHETTA MANCANTE nell'Excel finale (il file resta comunque salvato)")
+
+
 def pubblica_prescrizione_su_cfa(lotto: LottoMensile, presc: Prescrizione) -> bool:
     """
     Copia il PDF di UNA prescrizione nella cartella "CFA" del lotto su
@@ -1169,6 +1318,7 @@ def scrivi_excel_finale_reale(lotto_id) -> bool:
         shutil.copy2(file_excel_finale, destinazione)
         _correggi_link_pdf_excel(destinazione, lotto)
         _evidenzia_difformita_escluse(destinazione, db, lotto)
+        _correggi_etichetta_mancante_esclusa(destinazione, db, lotto)
         _evidenzia_campi_corretti(destinazione, lotto)
         pubblica_file(lotto.id, destinazione)
 
@@ -1180,6 +1330,7 @@ def scrivi_excel_finale_reale(lotto_id) -> bool:
         db.commit()
 
         log_elaborazione(db, elaborazione, f"Excel finale scritto: {destinazione}")
+        notifica_fase_completata(lotto, "excel")
         return True
 
     except ElaborazioneAnnullata:
@@ -1201,6 +1352,8 @@ def scrivi_excel_finale_reale(lotto_id) -> bool:
             lotto.stato = StatoLotto.eccezione
             lotto.note = ((lotto.note or "") + f"\n[{datetime.utcnow():%d/%m %H:%M}] Scrittura Excel: {exc}").strip()
         db.commit()
+        if lotto:
+            notifica_errore(lotto, "excel")
         return False
     finally:
         db.close()

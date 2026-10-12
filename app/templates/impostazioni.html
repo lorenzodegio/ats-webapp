@@ -28,17 +28,14 @@
   <form method="post" action="/impostazioni/farmacie/{{ farmacia_in_modifica.id }}/modifica">
     <div class="griglia-form">
       <div class="campo">
-        <label for="codice">Codice interno *</label>
+        <label for="codice">Codice identificativo univoco *</label>
         <input type="text" id="codice" name="codice" value="{{ form_farmacia.codice }}" required maxlength="20" placeholder="es. FAR001">
       </div>
       <div class="campo">
         <label for="nome">Nome ufficiale *</label>
         <input type="text" id="nome" name="nome" value="{{ form_farmacia.nome }}" required maxlength="255" placeholder="es. Farmacia Tili Snc">
       </div>
-      <div class="campo">
-        <label for="codice_regionale">Codice Regione (FARMACIA_ID)</label>
-        <input type="text" id="codice_regionale" name="codice_regionale" value="{{ form_farmacia.codice_regionale }}" maxlength="120" placeholder="es. CO0310 - TILI &amp; C.">
-      </div>
+      <input type="hidden" name="codice_regionale" value="{{ form_farmacia.codice_regionale }}">
       <div class="campo">
         <label for="indirizzo">Indirizzo</label>
         <input type="text" id="indirizzo" name="indirizzo" value="{{ form_farmacia.indirizzo }}" maxlength="500">
@@ -87,9 +84,8 @@
   <table class="tabella">
     <thead>
       <tr>
-        <th>Codice</th>
+        <th>Codice identificativo univoco</th>
         <th>Nome</th>
-        <th>Codice Regione</th>
         <th>Comune</th>
         <th>Contatti</th>
         <th>Prescrizioni</th>
@@ -105,7 +101,6 @@
           <strong>{{ f.nome }}</strong>
           {% if f.indirizzo %}<div class="sottotitolo">{{ f.indirizzo }}</div>{% endif %}
         </td>
-        <td class="mono">{{ f.codice_regionale or '—' }}</td>
         <td>{% if f.comune %}{{ f.comune }}{% if f.provincia %} ({{ f.provincia }}){% endif %}{% else %}—{% endif %}</td>
         <td>
           {% if f.telefono %}{{ f.telefono }}{% endif %}

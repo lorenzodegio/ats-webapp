@@ -434,6 +434,23 @@ table.tabella tr:last-child td { border-bottom: none; }
   box-shadow: 0 0 0 3px rgba(107, 144, 128, 0.15);
 }
 
+.campo-password { position: relative; }
+.campo-password input { padding-right: 68px; }
+.campo-password__toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sage);
+  padding: 4px 6px;
+}
+.campo-password__toggle:hover { color: var(--forest); }
+
 .btn {
   display: inline-flex;
   align-items: center;

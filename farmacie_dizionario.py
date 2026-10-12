@@ -93,6 +93,26 @@ def nomi_canonici() -> List[str]:
     return [f["nome"] for f in carica_farmacie() if f.get("nome")]
 
 
+def nome_da_farmacia_id(farmacia_id: str) -> Optional[str]:
+    """
+    Nome canonico della farmacia a partire dal FARMACIA_ID dell'Excel
+    Regione (es. "VA0210 - FARMACIA DR PERONI DI ANTONIO") — riusa
+    normalizza_nome_farmacia, che gia' fa sia il confronto per
+    sottostringa sul codice_regionale sia, se quello non basta, il
+    fuzzy-match sul NOME canonico (Levenshtein): il match e' quindi
+    principalmente sul nome farmacia, non sul codice_regionale da solo
+    (un confronto esatto o basato solo sul codice fallirebbe spesso,
+    perche' il FARMACIA_ID reale e' una descrizione completa, non un
+    semplice codice).
+
+    None se non c'e' nessun match (ne' per codice ne' per nome).
+    """
+    if not (farmacia_id or "").strip():
+        return None
+    canonico, codice = normalizza_nome_farmacia(farmacia_id)
+    return canonico if codice else None
+
+
 def _distanza_levenshtein(a: str, b: str) -> int:
     if a == b:
         return 0

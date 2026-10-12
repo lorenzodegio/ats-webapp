@@ -110,7 +110,7 @@
     <div class="kpi-card__etichetta">Prescrizioni pulite</div>
     <div class="kpi-card__valore">
       {% if lotto.n_prescrizioni_totali %}
-        {{ lotto.n_prescrizioni_totali - (lotto.n_prescrizioni_con_difformita or 0) }}
+        {{ lotto.n_prescrizioni_totali - lotto.n_prescrizioni_con_difformita_confermate }}
       {% else %}
         —
       {% endif %}
@@ -118,7 +118,7 @@
   </div>
   <div class="kpi-card">
     <div class="kpi-card__etichetta">Con difformità</div>
-    <div class="kpi-card__valore">{{ lotto.n_prescrizioni_con_difformita or 0 }}</div>
+    <div class="kpi-card__valore">{{ lotto.n_prescrizioni_con_difformita_confermate }}</div>
   </div>
   <div class="kpi-card">
     <div class="kpi-card__etichetta">Barcode da rivedere</div>
@@ -129,8 +129,8 @@
     <div class="kpi-card__valore">{{ lotto.score_ocr_medio or "—" }}</div>
   </div>
   <div class="kpi-card kpi-card--accento">
-    <div class="kpi-card__etichetta">Difformità totali</div>
-    <div class="kpi-card__valore">{{ lotto.n_difformita_totali or 0 }}</div>
+    <div class="kpi-card__etichetta">Difformità confermate</div>
+    <div class="kpi-card__valore">{{ lotto.n_difformita_confermate }}</div>
   </div>
 </div>
 

@@ -30,7 +30,7 @@
         <td class="mono">{{ "%02d"|format(lotto.mese) }}/{{ lotto.anno }}</td>
         <td>{% include "_badge_stato.html" %}</td>
         <td>{{ lotto.n_prescrizioni_totali or 0 }}</td>
-        <td>{{ lotto.n_difformita_totali or 0 }}</td>
+        <td>{{ lotto.n_difformita_confermate }}</td>
         <td>{{ lotto.updated_at|ora_locale }}</td>
       </tr>
       {% endfor %}

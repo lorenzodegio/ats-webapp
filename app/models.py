@@ -187,6 +187,22 @@ class LottoMensile(Base):
                 return e
         return None
 
+    @property
+    def n_difformita_confermate(self) -> int:
+        """
+        Difformita' confermate dall'operatore in tutto il lotto — quella
+        mostrata nei report (elenco lotti, dettaglio lotto, dashboard),
+        a differenza di n_difformita_totali che resta il conteggio grezzo
+        rilevato dalla pipeline in fase 3, congelato prima di qualunque
+        revisione manuale.
+        """
+        return sum(p.n_difformita_confermate for p in self.prescrizioni)
+
+    @property
+    def n_prescrizioni_con_difformita_confermate(self) -> int:
+        """Prescrizioni del lotto con almeno una difformita' confermata."""
+        return sum(1 for p in self.prescrizioni if p.n_difformita_confermate > 0)
+
 
 # ============================================================
 # Caricamenti file — traccia l'upload iniziale locale -> SharePoint
@@ -365,6 +381,16 @@ class Prescrizione(Base):
 
     dati_ocr = relationship("DatiOcr", back_populates="prescrizione", uselist=False, cascade="all, delete-orphan")
     difformita = relationship("Difformita", back_populates="prescrizione", cascade="all, delete-orphan")
+
+    @property
+    def n_difformita_confermate(self) -> int:
+        """
+        Difformita' di questa prescrizione confermate dall'operatore —
+        le uniche contate nei report (dashboard, elenco lotti, dettaglio
+        lotto, archivio): "rilevata" e' solo un sospetto della pipeline
+        non ancora revisionato, "esclusa" e' un falso positivo scartato.
+        """
+        return sum(1 for d in self.difformita if d.stato == StatoDifformita.confermata)
 
 
 # ============================================================

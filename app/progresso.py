@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from app.models import FaseElaborazione, StatoLotto
 
-_PATTERN_PROGRESSO = re.compile(r"\[(\d+)/(\d+)\]")
+_PATTERN_PROGRESSO = re.compile(r"\[(\d+)/(\d+)\]\s+\S+\.(?:pdf|json)\s*$")
 
 FUSO_ROMA = ZoneInfo("Europe/Rome")
 
@@ -98,10 +98,18 @@ def formatta_log_righe(righe) -> list:
 
 def estrai_progresso_da_log(log_lines) -> dict:
     """
-    Cerca nell'ultima riga di log (piu' recente prima) un pattern
-    "[i/N]" (formato gia' prodotto sia da pipeline.py nel backend reale,
-    sia da fake_pipeline.py nel backend finto — stesso formato per i due
-    backend, cosi' il frontend non deve saperne la differenza).
+    Cerca nell'ultima riga di log (piu' recente prima) il contatore
+    "[i/N] nomefile.pdf" (o ".json" per l'analisi difformita') prodotto
+    per ogni ricetta elaborata — richiede che il nome file segua
+    immediatamente e chiuda la riga: le righe di avvio/fine FASE tipo
+    "[2/4] Estrazione OCR — modello: ..." hanno lo stesso identico
+    formato "[i/N]" ma NON sono un contatore per-ricetta (indicano invece
+    "fase i di 4" nell'intera pipeline preprocessing/ocr/difformita/excel)
+    — senza il vincolo sul nome file, un lotto da 2 ricette veniva letto
+    come "1/2 completata" nell'istante stesso in cui la fase OCR partiva
+    (perche' "[2/4]" e "[1/2]" hanno la stessa frazione, 0.5), ben prima
+    che qualunque ricetta fosse davvero finita — bug reale, verificato
+    sui log di un'elaborazione in corso.
     Ritorna {"attuale": i, "totale": N} oppure None se non trovato.
     """
     for riga in reversed(log_lines):

@@ -87,7 +87,6 @@ def esegui_estrazione(input_dir: Path, output_dir: Path, solo_test: bool,
     inizio = datetime.now()
 
     for i, pdf in enumerate(pdf_files, 1):
-        log.info(f"  [{i}/{len(pdf_files)}] {pdf.name}")
         try:
             dati = ocr_cannabis.estrai_dati(pdf)
             if dati:
@@ -101,6 +100,17 @@ def esegui_estrazione(input_dir: Path, output_dir: Path, solo_test: bool,
         except Exception as e:
             errori.append(pdf.name)
             log.error(f"    -> Errore: {e}")
+        # Contatore "[i/N]" stampato a fine elaborazione della ricetta, non
+        # all'inizio: la barra di avanzamento in webapp (app/progresso.py:
+        # _percentuale_proporzionale, che legge l'ultima riga "[i/N]" del
+        # log) deve avanzare solo quando la ricetta e' DAVVERO completata,
+        # non quando e' solo iniziata — altrimenti l'ultima ricetta porta
+        # la barra al tetto della fase (80%) nell'istante in cui parte,
+        # non quando finisce. Questo e' il loop REALMENTE eseguito dalla
+        # pipeline Docker (ocr_cannabis.py ha una copia della stessa
+        # logica nel suo main(), usata pero' solo quando lo si lancia in
+        # standalone, mai da qui).
+        log.info(f"  [{i}/{len(pdf_files)}] {pdf.name}")
 
         if on_ricetta_completata is not None:
             try:

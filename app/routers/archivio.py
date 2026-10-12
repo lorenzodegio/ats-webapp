@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.auth import get_utente_corrente
-from app.models import Prescrizione, LottoMensile, Utente, DatiOcr
+from app.models import Prescrizione, LottoMensile, Utente, DatiOcr, Farmacia
 from app.progresso import formatta_ora_locale
 
 router = APIRouter(tags=["archivio"])
@@ -31,11 +31,22 @@ def archivio(
         .options(joinedload(Prescrizione.lotto), joinedload(Prescrizione.dati_ocr))
     )
     if q:
-        query = query.filter(or_(
+        # Il codice identificativo univoco della farmacia (Farmacia.codice)
+        # non e' collegato da FK a DatiOcr.nome_farmacia (stringa libera,
+        # normalizzata al nome canonico in fase OCR da
+        # farmacie_dizionario.normalizza_nome_farmacia) — per cercare per
+        # codice si risale prima al/ai nomi canonici corrispondenti.
+        nomi_farmacia_per_codice = [
+            nome for (nome,) in db.query(Farmacia.nome).filter(Farmacia.codice.ilike(f"%{q}%")).all()
+        ]
+        condizioni = [
             Prescrizione.barcode.ilike(f"%{q}%"),
             LottoMensile.nome.ilike(f"%{q}%"),
             DatiOcr.nome_farmacia.ilike(f"%{q}%"),
-        ))
+        ]
+        if nomi_farmacia_per_codice:
+            condizioni.append(DatiOcr.nome_farmacia.in_(nomi_farmacia_per_codice))
+        query = query.filter(or_(*condizioni))
     prescrizioni = (
         query.order_by(LottoMensile.created_at.desc(), Prescrizione.barcode.asc())
         .limit(LIMITE_PRESCRIZIONI)

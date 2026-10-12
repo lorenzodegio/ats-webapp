@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.auth import get_utente_corrente
-from app.models import LottoMensile, StatoLotto, Prescrizione, Difformita, Utente
+from app.models import LottoMensile, StatoLotto, Prescrizione, Difformita, StatoDifformita, Utente
 from app.progresso import percentuale_avanzamento, etichetta_stato, messaggio_fase_operatore, estrai_progresso_da_log
 
 router = APIRouter(tags=["dashboard"])
@@ -87,13 +87,20 @@ def dashboard(
 
     lotti_totali = len(lotti_filtrati_ids)
     prescrizioni_totali = sum(l.n_prescrizioni_totali or 0 for l in lotti_filtrati)
-    difformita_totali = sum(l.n_difformita_totali or 0 for l in lotti_filtrati)
 
+    # Solo le difformita' CONFERMATE dall'operatore contano nei report —
+    # "rilevata" e' solo un sospetto della pipeline non ancora
+    # revisionato, "esclusa" e' un falso positivo scartato (vedi anche
+    # Prescrizione.n_difformita_confermate/LottoMensile.n_difformita_confermate).
     difformita_query = (
         db.query(Difformita)
         .join(Prescrizione)
-        .filter(Prescrizione.lotto_id.in_(lotti_filtrati_ids or [None]))
+        .filter(
+            Prescrizione.lotto_id.in_(lotti_filtrati_ids or [None]),
+            Difformita.stato == StatoDifformita.confermata,
+        )
     )
+    difformita_totali = difformita_query.count()
     difformita_per_codice = Counter(codice for (codice,) in difformita_query.with_entities(Difformita.codice).all())
     difformita_per_codice = dict(
         sorted(difformita_per_codice.items(), key=lambda kv: kv[1], reverse=True)[:6]

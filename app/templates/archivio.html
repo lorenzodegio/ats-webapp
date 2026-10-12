@@ -5,13 +5,13 @@
 <div class="main__header">
   <div>
     <h1>Archivio</h1>
-    <div class="sottotitolo">Storico prescrizioni, raggruppate per lotto — ricercabili per barcode, nome lotto o farmacia</div>
+    <div class="sottotitolo">Storico prescrizioni, raggruppate per lotto — ricercabili per barcode, nome lotto, nome farmacia o Codice identificativo univoco</div>
   </div>
 </div>
 
 <div class="card">
   <form method="get" action="/archivio" class="filtri-riga">
-    <input type="search" name="q" value="{{ q }}" placeholder="Cerca per barcode, lotto o farmacia…" style="min-width:260px;">
+    <input type="search" name="q" value="{{ q }}" placeholder="Cerca per barcode, lotto, farmacia o Codice identificativo univoco…" style="min-width:340px; flex:1;">
     <button type="submit" class="btn btn--secondario">Cerca</button>
     {% if q %}<a href="/archivio" class="btn btn--secondario">Azzera</a>{% endif %}
   </form>
@@ -58,7 +58,7 @@
             <td>{{ p.dati_ocr.nome_farmacia if p.dati_ocr and p.dati_ocr.nome_farmacia else '—' }}</td>
             <td class="mono" style="font-size:12px;">{{ p.stato_barcode.value.replace('_', ' ') }}</td>
             <td>{{ p.score_ocr or '—' }}</td>
-            <td>{{ p.difformita | length }}</td>
+            <td>{{ p.n_difformita_confermate }}</td>
             <td>{{ p.created_at|ora_locale }}</td>
           </tr>
           {% endfor %}

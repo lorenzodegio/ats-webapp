@@ -15,6 +15,9 @@
       {% if errore %}
       <div class="errore-form">{{ errore }}</div>
       {% endif %}
+      {% if request.query_params.get('registrato') %}
+      <div class="ok-form">Account creato. Ora puoi accedere.</div>
+      {% endif %}
 
       <form method="post" action="/login">
         <div class="campo">
@@ -23,13 +26,22 @@
         </div>
         <div class="campo">
           <label for="password">Password</label>
-          <input type="password" id="password" name="password" required>
+          <div class="campo-password">
+            <input type="password" id="password" name="password" required>
+            <button type="button" class="campo-password__toggle" aria-label="Mostra password"
+                    onclick="toggleMostraPassword('password', this)">Mostra</button>
+          </div>
         </div>
         <button type="submit" class="btn btn--primario" style="width:100%; justify-content:center;">
           Accedi
         </button>
       </form>
+
+      <p style="text-align:center; margin-top:16px; font-size:13px;">
+        Non hai un account? <a href="/register">Registrati</a>
+      </p>
     </div>
   </div>
+  <script src="/static/js/password-toggle.js"></script>
 </body>
 </html>
