@@ -90,8 +90,51 @@ Flag `pipeline_backend` nella tabella `Configurazione`:
   su questa macchina (niente Docker/WSL disponibili qui).
 - `real_pipeline.py`: Docker reale + Ollama/Qwen2.5-VL, integra gli script
   di Francesco (`ocr_cannabis.py`, `phase1_preprocess.py`, `phase4_excel.py`,
-  `phase5_difformita.py`, `pipeline.py`). Solo sulla macchina ATS (GPU NVIDIA
-  5060 Ti, Docker Engine su WSL2).
+  `phase5_difformita.py`, `pipeline.py`). Sulla macchina ATS con GPU (Docker
+  Engine su WSL2), o su un server senza Docker tramite `PIPELINE_RUNNER=local`
+  (vedi sezione sotto) — le due modalità convivono, stessa logica.
+
+## Produzione su Windows Server (senza Docker/WSL2, senza GPU)
+Branch `deploy/windows-server` (da `dev`). Pensato per un server Windows
+Server 2022 (VM, CPU-only, es. 40 vCPU) dove Docker/WSL2 non sono
+disponibili — `real_pipeline.py` lancia la pipeline come **processo Python
+nativo** invece che in container, riusando `docker/run_fase.py` così com'è.
+La macchina ATS con GPU continua a usare Docker normalmente: è una scelta
+per MACCHINA (`PIPELINE_RUNNER`), non per lotto.
+
+Riepilogo delle differenze rispetto allo sviluppo locale (dettagli completi
+in `DEPLOY_WINDOWS.md`):
+- `PIPELINE_RUNNER=docker|local` — in locale lancia `PIPELINE_PYTHON
+  <PIPELINE_DIR>/docker/run_fase.py <fase>`; pausa/ripresa/annullamento con
+  `psutil` (suspend/resume/terminate sull'intero albero di processi) invece
+  di `docker pause/unpause/kill`.
+- `STORAGE_BACKEND=onedrive|local` (`app/storage.py`) — `local` è il default
+  in produzione (cartella Windows fissa, `STORAGE_LOCAL_DIR`), niente
+  OneDrive sul server. Con `APP_ENV=production` il fallback silenzioso su
+  `sharepoint_finto/` è disattivato: un percorso non valido blocca
+  l'operazione (o l'avvio dell'app) invece di scrivere altrove in silenzio.
+- Schema DB gestito con **Alembic** (`alembic/`, baseline nella prima
+  revisione) quando `APP_ENV=production` — `Base.metadata.create_all()`
+  resta attivo solo fuori produzione. Un DB esistente creato con
+  `create_all()` va allineato con `alembic stamp head`, non `upgrade head`.
+- `SESSION_SECRET_KEY` obbligatoria in produzione (l'app non parte senza).
+  `seed_admin.py` accetta `ADMIN_INITIAL_PASSWORD` per l'installer, niente
+  prompt interattivo e nessun default.
+- Dipendenze gestite con `uv`: `pyproject.toml`/`uv.lock` alla radice per la
+  webapp, `docker/pyproject.toml`/`docker/uv.lock` per la pipeline (ambiente
+  Python **separato**, torch dalla build CPU-only). `requirements.txt` e
+  `docker/requirements.txt` restano le fonti per le immagini Docker
+  (macchina GPU), invariate.
+- EasyOCR forzato `gpu=False` quando CUDA non è disponibile (prima leggeva
+  per sbaglio `NUM_GPU`, una manopola specifica di Ollama). `num_thread`
+  configurabile per modello pesante/leggero via `.env`
+  (`OLLAMA_NUM_THREAD_PESANTE`/`_LEGGERO`), `NUM_CTX` ora letto da env.
+- `/health`, limite dimensione upload, cookie `Secure` in produzione, log
+  della webapp con rotazione su file (`LOG_DIR`) — il canale che inoltra
+  l'output grezzo della pipeline (può contenere dati di prescrizione) resta
+  **solo** nel DB e in console, mai nel file di log su disco.
+- Script operativi in `deploy/windows/` (install/update/backup/restore/status)
+  e `benchmark.py` per calibrare thread/parallelismo sulle vCPU disponibili.
 
 ## Design system (rispettare sempre, non inventare nuove classi)
 - Palette: forest #2B3B35, sage #6B9080, sageLight #A4C3B2, terracotta #C9895B
