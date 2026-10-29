@@ -8,9 +8,10 @@ load_dotenv()
 import os
 
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.responses import PlainTextResponse
 
 from app.database import Base, engine, SessionLocal
 from app.config_helper import assicura_pipeline_reale
@@ -63,7 +64,59 @@ if not SECRET_KEY:
 # scarta alla chiusura completa (non alla chiusura di una singola scheda)
 # — senza login persiste per 14 giorni anche chiudendo l'app, con questo
 # richiede l'accesso ogni volta che il browser viene chiuso del tutto.
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", max_age=None)
+# https_only aggiunge il flag Secure al cookie (mai inviato su HTTP in
+# chiaro) — attivo solo in produzione, dove IIS fa da reverse proxy HTTPS
+# davanti a uvicorn; in sviluppo locale (HTTP semplice) lo spegnerebbe del
+# tutto. HttpOnly e' gia' sempre impostato da SessionMiddleware di suo,
+# non c'e' un parametro per disattivarlo.
+app.add_middleware(
+    SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", max_age=None,
+    https_only=(APP_ENV == "production"),
+)
+
+# Limite dimensione upload — difesa in piu' oltre a qualunque limite gia'
+# impostato in IIS: senza questo un upload enorme (o un client malevolo)
+# potrebbe tenere occupata la richiesta a lungo prima di essere scartata a
+# valle. Controllato su Content-Length (dichiarato dal client): non è una
+# garanzia assoluta contro un client che mente sulla dimensione, ma copre
+# il caso normale (upload PDF dal wizard) senza dover bufferizzare il
+# corpo per contarlo qui.
+MAX_UPLOAD_SIZE_BYTES = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "200")) * 1024 * 1024
+
+
+@app.middleware("http")
+async def _limita_dimensione_upload(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > MAX_UPLOAD_SIZE_BYTES:
+                return PlainTextResponse(
+                    f"Corpo della richiesta troppo grande (limite {MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)} MB).",
+                    status_code=413,
+                )
+        except ValueError:
+            pass
+    return await call_next(request)
+
+
+@app.get("/health")
+def health_check():
+    """
+    Endpoint per WinSW (riavvio automatico in caso di errore) e per
+    status.ps1 — verifica che l'app risponda E che il DB sia raggiungibile
+    (un 200 che nasconde un DB giu' sarebbe inutile per un controllo di
+    salute). Nessun dato sensibile nella risposta.
+    """
+    from sqlalchemy import text
+    try:
+        db = SessionLocal()
+        try:
+            db.execute(text("SELECT 1"))
+        finally:
+            db.close()
+    except Exception as exc:
+        return JSONResponse({"status": "errore", "dettaglio": "database non raggiungibile"}, status_code=503)
+    return {"status": "ok"}
 
 
 @app.middleware("http")
