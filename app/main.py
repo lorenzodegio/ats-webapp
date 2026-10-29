@@ -5,7 +5,41 @@ Avvio: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 from dotenv import load_dotenv
 load_dotenv()
 
+import logging
 import os
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+# Configurato PRIMA di qualunque altro import dell'app: finora non esisteva
+# nessuna configurazione di logging nella webapp (nessun basicConfig), quindi
+# i log.info()/log.warning() sparsi in app/* non finivano da nessuna parte
+# (root logger senza handler). LOG_DIR default alla cartella locale del
+# progetto per lo sviluppo, sovrascritta in produzione (E:\apps\ocr-cannabis\logs).
+LOG_DIR = Path(os.environ.get("LOG_DIR", str(Path(__file__).resolve().parent.parent / "logs")))
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+_formato_log = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+_handler_file = RotatingFileHandler(
+    LOG_DIR / "ats-webapp.log", maxBytes=10 * 1024 * 1024, backupCount=10, encoding="utf-8",
+)
+_handler_file.setFormatter(_formato_log)
+_handler_console = logging.StreamHandler()
+_handler_console.setFormatter(_formato_log)
+logging.basicConfig(level=logging.INFO, handlers=[_handler_file, _handler_console])
+
+# "RealPipeline" (app/real_pipeline.py) inoltra anche l'output grezzo della
+# pipeline OCR riga per riga (vedi log_elaborazione), che puo' contenere dati
+# della prescrizione (nomi, codici fiscali, importi...) — quel canale resta
+# SOLO nel DB (tabella log_elaborazioni, gia' visibile nell'interfaccia
+# dell'elaborazione) e in console per il debug dal vivo: niente dati di
+# prescrizione nel file di log su disco, per questo qui sotto NON eredita
+# l'handler su file configurato sopra (propagate=False).
+_handler_console_pipeline = logging.StreamHandler()
+_handler_console_pipeline.setFormatter(_formato_log)
+_log_pipeline = logging.getLogger("RealPipeline")
+_log_pipeline.addHandler(_handler_console_pipeline)
+_log_pipeline.propagate = False
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
