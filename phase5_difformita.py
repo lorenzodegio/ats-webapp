@@ -52,6 +52,12 @@ logger = logging.getLogger("Phase5")
 
 OLLAMA_MODEL_TESTO = os.getenv("OLLAMA_MODEL_TESTO", "qwen3-vl:8b-instruct")
 USA_LLM_SEMANTICO   = os.getenv("USA_LLM_SEMANTICO", "true").lower() == "true"
+# Stesso ruolo "leggero" di NUM_THREAD_LEGGERO in ocr_cannabis.py — qui
+# ripetuto perche' questo modulo gira anche da solo (python phase5_difformita.py),
+# senza importare ocr_cannabis.py. Non passato se non impostato (comportamento
+# identico a prima, Ollama decide in autonomia).
+_num_thread_testo = os.getenv("OLLAMA_NUM_THREAD_LEGGERO")
+NUM_THREAD_TESTO = int(_num_thread_testo) if _num_thread_testo else None
 
 try:
     import ollama
@@ -820,6 +826,9 @@ def _chiama_llm_testo(prompt: str) -> dict:
     if not OLLAMA_DISPONIBILE:
         return {}
     try:
+        opzioni = {"temperature": 0.0, "num_ctx": 4096}
+        if NUM_THREAD_TESTO is not None:
+            opzioni["num_thread"] = NUM_THREAD_TESTO
         response = ollama.chat(
             model=OLLAMA_MODEL_TESTO,
             messages=[{"role": "user", "content": prompt + ("\n\n/no_think" if "qwen3" in OLLAMA_MODEL_TESTO.lower() else "")}],
@@ -827,7 +836,7 @@ def _chiama_llm_testo(prompt: str) -> dict:
             # rallentare i check (girano su ogni riga) e per non rischiare
             # che testo di ragionamento residuo confonda la regex sotto.
             think=False,
-            options={"temperature": 0.0, "num_ctx": 4096}
+            options=opzioni,
         )
         testo = response["message"]["content"].strip()
         testo = re.sub(r'<think>[\s\S]*?</think>', '', testo, flags=re.IGNORECASE).strip()

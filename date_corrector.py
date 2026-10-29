@@ -18,6 +18,7 @@ Utilizzo:
     dati = corrector.correggi(dati, pdf_path)
 """
 
+import os
 import re
 import io
 import json
@@ -590,14 +591,49 @@ class DateCorrector:
         self.usa_qwen_su_crop = usa_qwen_su_crop
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._easyocr_reader = None
+        # Stesso ruolo pesante/leggero di NUM_THREAD_PESANTE/LEGGERO in
+        # ocr_cannabis.py (ripetuto qui perche' questo modulo gira anche da
+        # solo): qwen_model e' quasi sempre MODELLO_PESANTE quando questa
+        # classe viene istanziata da ocr_cannabis.py::get_date_corrector(),
+        # ma il confronto e' per nome cosi' funziona anche per uso standalone
+        # con un modello diverso — se non riconosciuto, nessun override
+        # (comportamento identico a prima, Ollama decide in autonomia).
+        modello_pesante_atteso = os.environ.get("MODELLO_PESANTE", "qwen3-vl:30b-a3b-instruct")
+        thread_pesante = os.environ.get("OLLAMA_NUM_THREAD_PESANTE")
+        thread_leggero = os.environ.get("OLLAMA_NUM_THREAD_LEGGERO")
+        if qwen_model == modello_pesante_atteso and thread_pesante:
+            self._num_thread = int(thread_pesante)
+        elif qwen_model != modello_pesante_atteso and thread_leggero:
+            self._num_thread = int(thread_leggero)
+        else:
+            self._num_thread = None
+
+    def _opzioni_llm(self) -> dict:
+        """Opzioni condivise da tutte le chiamate ollama.chat() di questa
+        classe — centralizza num_thread cosi' le 7 chiamate dirette sotto
+        restano identiche tra loro invece di ripetere la stessa logica."""
+        opzioni = {"temperature": 0.0}
+        if self._num_thread is not None:
+            opzioni["num_thread"] = self._num_thread
+        return opzioni
 
     def _get_easyocr_reader(self):
         """Carica (una sola volta) il reader EasyOCR usato per l'ancoraggio dinamico."""
         if self._easyocr_reader is None:
             try:
+                import os
                 import easyocr
                 log.info("Caricamento EasyOCR (condiviso da tutti gli ancoraggi dinamici: date, esenzione, Prep.)...")
-                self._easyocr_reader = easyocr.Reader(["it"], gpu=(self.device.type == "cuda"))
+                # EASYOCR_MODEL_DIR: cartella dei pesi del modello, scaricati
+                # in anticipo da install.ps1 — senza questo EasyOCR li
+                # scarica al primo avvio nel profilo utente di chi esegue il
+                # processo (es. svc_ocr), comodo in sviluppo ma da evitare
+                # in produzione (dipendenza di rete al primo avvio reale).
+                cartella_modelli = os.environ.get("EASYOCR_MODEL_DIR") or None
+                self._easyocr_reader = easyocr.Reader(
+                    ["it"], gpu=(self.device.type == "cuda"),
+                    model_storage_directory=cartella_modelli,
+                )
             except Exception as e:
                 log.warning(f"EasyOCR non disponibile per ancoraggio dinamico: {e}")
                 self._easyocr_reader = False  # sentinella: non ritentare ogni volta
@@ -655,7 +691,7 @@ class DateCorrector:
                     "images": [img_b64]
                 }],
                 think=False,
-                options={"temperature": 0.0}
+                options=self._opzioni_llm()
             )
             testo = _contenuto_pulito(response).upper()
             log.info(f"    [codice_esenzione] risposta grezza crop: {testo!r}")
@@ -735,7 +771,7 @@ class DateCorrector:
                     "images": [img_b64]
                 }],
                 think=False,
-                options={"temperature": 0.0}
+                options=self._opzioni_llm()
             )
             testo = _contenuto_pulito(response)
             log.info(f"    [totale_prescrizione] risposta grezza crop: {testo!r}")
@@ -841,7 +877,7 @@ class DateCorrector:
                     "images": [img_b64]
                 }],
                 think=False,
-                options={"temperature": 0.0}
+                options=self._opzioni_llm()
             )
             testo = _contenuto_pulito(response)
             log.info(f"    [testo_prescrizione] risposta grezza crop: {testo!r}")
@@ -900,7 +936,7 @@ class DateCorrector:
                     "images": [img_b64]
                 }],
                 think=False,
-                options={"temperature": 0.0}
+                options=self._opzioni_llm()
             )
             testo = _contenuto_pulito(response).upper()
             log.info(f"    [codice_fiscale] risposta grezza crop: {testo!r}")
@@ -960,7 +996,7 @@ class DateCorrector:
                     "images": [img_b64]
                 }],
                 think=False,
-                options={"temperature": 0.0}
+                options=self._opzioni_llm()
             )
             testo = _contenuto_pulito(response)
             log.info(f"    [nome_cognome_assistito] risposta grezza crop: {testo!r}")
@@ -1056,7 +1092,7 @@ class DateCorrector:
                     "images": [img_b64]
                 }],
                 think=False,
-                options={"temperature": 0.0}
+                options=self._opzioni_llm()
             )
             testo = _contenuto_pulito(response)
             log.info(f"    [data_etichetta_preparazione] risposta grezza crop dinamico: {testo!r}")
@@ -1188,7 +1224,7 @@ class DateCorrector:
                     "images": [img_b64]
                 }],
                 think=False,
-                options={"temperature": 0.0}
+                options=self._opzioni_llm()
             )
             testo = _contenuto_pulito(response)
             # Rimuove eventuali backtick/markdown attorno al JSON

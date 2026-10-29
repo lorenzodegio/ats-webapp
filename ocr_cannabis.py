@@ -126,7 +126,15 @@ IMAGE_ZOOM   = 3.0
 # (utile solo per confronto/debug), qualunque numero positivo forza quel
 # tetto di layer (sconsigliato per modelli più grandi della VRAM, vedi sopra).
 NUM_GPU      = None
-NUM_CTX      = 16384
+NUM_CTX      = int(os.getenv("NUM_CTX", "16384"))
+# Thread CPU per chiamata Ollama, separati per gruppo pesante/leggero (vedi
+# "peso" in GRUPPI_ESTRAZIONE) — rilevante soprattutto su un server CPU-only
+# con molti core (es. 40 vCPU): non passato se non impostato, lascia decidere
+# a Ollama (comportamento identico a prima, nessun default inventato qui).
+NUM_THREAD_PESANTE = os.getenv("OLLAMA_NUM_THREAD_PESANTE")
+NUM_THREAD_LEGGERO = os.getenv("OLLAMA_NUM_THREAD_LEGGERO")
+NUM_THREAD_PESANTE = int(NUM_THREAD_PESANTE) if NUM_THREAD_PESANTE else None
+NUM_THREAD_LEGGERO = int(NUM_THREAD_LEGGERO) if NUM_THREAD_LEGGERO else None
 
 # Rete di sicurezza aggiuntiva contro il thinking mode di Qwen3-VL, che
 # abbiamo verificato NON essere sempre rispettato dal solo parametro API
@@ -1131,13 +1139,24 @@ def get_easyocr_reader():
         return None
     if _easyocr_reader is None:
         try:
+            import torch
             import easyocr
             log.info("Caricamento EasyOCR (fallback rilevamento etichetta)...")
-            # NUM_GPU ora è: None=lascia decidere Ollama (default), 0=forza CPU,
-            # N=forza N layer su GPU. Per EasyOCR (parametro gpu davvero
-            # booleano) None e qualunque valore positivo intendono "usa la
-            # GPU"; solo 0 esplicito significa "no".
-            _easyocr_reader = easyocr.Reader(["it"], gpu=(NUM_GPU is None or NUM_GPU > 0))
+            # NUM_GPU e' una manopola specifica di Ollama (num_gpu: quanti
+            # layer caricare su GPU — None/positivo NON vuol dire "c'e' una
+            # GPU", vedi commenti sopra NUM_GPU in cima al file), non va
+            # riusata per EasyOCR (parametro gpu, booleano vero): qui si
+            # chiede direttamente a torch se CUDA e' davvero disponibile,
+            # stessa logica gia' corretta in date_corrector.py. Su un
+            # server CPU-only (niente GPU, es. Windows Server senza CUDA)
+            # questo risolve correttamente a gpu=False.
+            # EASYOCR_MODEL_DIR: vedi commento identico in date_corrector.py
+            # (_get_easyocr_reader) — stessa cartella pre-scaricata, se impostata.
+            cartella_modelli = os.environ.get("EASYOCR_MODEL_DIR") or None
+            _easyocr_reader = easyocr.Reader(
+                ["it"], gpu=torch.cuda.is_available(),
+                model_storage_directory=cartella_modelli,
+            )
         except Exception as e:
             log.warning(f"EasyOCR non disponibile, fallback disabilitato: {e}")
             _easyocr_reader = False  # sentinella: non ritentare ad ogni ricetta
@@ -1730,6 +1749,9 @@ def estrai_dati(pdf_path: Path) -> dict:
         # base alla VRAM realmente disponibile — vedi commento sopra NUM_GPU
         # sul perché forzare un valore fisso (99) ha peggiorato le cose.
         opzioni_chiamata = {"num_ctx": NUM_CTX, "temperature": 0.0}
+        num_thread_gruppo = NUM_THREAD_PESANTE if peso == "pesante" else NUM_THREAD_LEGGERO
+        if num_thread_gruppo is not None:
+            opzioni_chiamata["num_thread"] = num_thread_gruppo
         if NUM_GPU is not None:
             opzioni_chiamata["num_gpu"] = NUM_GPU
 
