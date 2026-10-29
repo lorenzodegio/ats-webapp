@@ -1,0 +1,27 @@
+[project]
+name = "ats-webapp"
+version = "0.1.0"
+description = "ATS Insubria — backend FastAPI per la gestione prescrizioni cannabis terapeutica"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.115.0",
+    "uvicorn[standard]==0.30.6",
+    "sqlalchemy==2.0.35",
+    "jinja2==3.1.4",
+    "python-multipart==0.0.9",
+    "bcrypt==4.2.0",
+    "itsdangerous==2.2.0",
+    "python-dotenv==1.0.1",
+    "requests==2.32.3",
+    "pandas>=2.2.0",
+    "openpyxl>=3.1.2",
+    "psycopg2-binary>=2.9.9",
+    "pypdf>=5.0.0",
+    "psutil>=6.0.0",
+    "alembic>=1.13.0",
+]
+
+# requirements.txt resta la fonte usata da docker/Dockerfile.web (build
+# Docker del server, macchina GPU) — questo pyproject.toml/uv.lock e'
+# l'installazione nativa (Windows Server, install.ps1/update.ps1). Stessi
+# pacchetti/versioni: se aggiorni uno, aggiorna anche l'altro.

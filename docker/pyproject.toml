@@ -1,0 +1,46 @@
+[project]
+name = "ats-ocr-pipeline"
+version = "0.1.0"
+description = "ATS Insubria — ambiente Python della pipeline OCR (processo nativo, PIPELINE_RUNNER=local)"
+requires-python = ">=3.11"
+dependencies = [
+    "PyMuPDF",
+    "opencv-python-headless",
+    "numpy",
+    "pillow",
+    "pytesseract",
+    "pyzbar",
+    "deskew",
+    "pandas",
+    "openpyxl",
+    "ollama",
+    "easyocr",
+    "torch",
+]
+
+# Progetto SEPARATO dalla webapp (pyproject.toml alla radice del repo):
+# ambiente Python dedicato, lock indipendente — questi pacchetti (in
+# particolare torch/easyocr, grossi e CPU-only su questo server) non
+# devono mai finire nel venv della webapp, che non fa OCR direttamente.
+# docker/requirements.txt resta la fonte usata da docker/Dockerfile (build
+# dei 4 container della pipeline, macchina GPU) — stessi pacchetti, qui con
+# versioni risolte/bloccate per l'installazione nativa (install.ps1).
+#
+# Uso (da questa cartella):
+#   uv sync                 # crea/aggiorna .venv qui dentro
+#   .venv\Scripts\python.exe = PIPELINE_PYTHON nel .env della webapp
+#   PIPELINE_DIR nel .env della webapp = radice del repo (un livello sopra
+#   questa cartella) — e' li' che vivono ocr_cannabis.py/pipeline.py/ecc.,
+#   run_fase.py li importa via sys.path (vedi run_fase.py).
+
+[tool.uv.sources]
+# torch dalla build CPU-only (niente GPU sul server Windows): l'indice
+# generico PyPI tira giu' per default la variante CUDA, enorme e inutile
+# qui. "explicit = true" sull'indice sotto: usalo SOLO per torch, non per
+# gli altri pacchetti (che restano da PyPI normale).
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
