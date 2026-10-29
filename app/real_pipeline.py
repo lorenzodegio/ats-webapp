@@ -44,6 +44,7 @@ import subprocess
 from datetime import datetime, date
 from pathlib import Path
 
+import psutil
 import openpyxl
 from openpyxl.styles import Font, PatternFill
 from sqlalchemy.orm import Session
@@ -75,6 +76,24 @@ from app.models import (
 from app.notifiche_email import notifica_fase_completata, notifica_errore
 
 log = logging.getLogger("RealPipeline")
+
+# PIPELINE_RUNNER=docker (default, comportamento storico — macchina GPU con
+# Docker Desktop/Engine) oppure "local" (processo Python nativo, per server
+# senza Docker/WSL2 — vedi _esegui_processo_locale). Le due modalita' devono
+# convivere: quale usare e' una scelta per MACCHINA, non per lotto.
+PIPELINE_RUNNER = os.environ.get("PIPELINE_RUNNER", "docker").strip().lower()
+# Interprete e cartella dell'ambiente Python dedicato alla pipeline (separato
+# da quello della webapp: torch/easyocr/ecc. non servono qui). Richiesti solo
+# se PIPELINE_RUNNER=local (controllato a runtime, non all'import, per non
+# rompere l'avvio su chi usa ancora solo Docker).
+PIPELINE_PYTHON = os.environ.get("PIPELINE_PYTHON", "").strip() or None
+PIPELINE_DIR = os.environ.get("PIPELINE_DIR", "").strip() or None
+
+# Prefisso che distingue un identificatore "processo locale" (pid nativo) da
+# un nome di container Docker in elaborazione.nome_container — permette a
+# metti_in_pausa_container/riprendi_container/annulla_container di capire
+# quale meccanismo usare senza dover conoscere PIPELINE_RUNNER a quel punto.
+PREFISSO_LOCALE = "local-pid-"
 
 EXCEL_REGIONE_DIR = DATI_DIR / "excel_regione"
 OUTPUT_DIR = DATI_DIR / "output"
@@ -242,15 +261,82 @@ def recupera_elaborazioni_orfane(db: Session) -> int:
     return len(orfane)
 
 
+def _processo_e_figli(pid: int) -> list:
+    """L'intero albero di processi (padre incluso) per un pid nativo —
+    run_fase.py puo' a sua volta avviare processi worker (torch/easyocr),
+    sospendere/terminare solo il padre li lascerebbe orfani e attivi."""
+    try:
+        padre = psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        return []
+    try:
+        figli = padre.children(recursive=True)
+    except psutil.NoSuchProcess:
+        figli = []
+    return [padre] + figli
+
+
+def _sospendi_albero_locale(pid: int) -> bool:
+    try:
+        for p in _processo_e_figli(pid):
+            try:
+                p.suspend()
+            except psutil.NoSuchProcess:
+                pass
+        return True
+    except Exception as exc:
+        log.warning(f"Impossibile sospendere il processo locale (pid {pid}): {exc}")
+        return False
+
+
+def _riprendi_albero_locale(pid: int) -> bool:
+    try:
+        for p in _processo_e_figli(pid):
+            try:
+                p.resume()
+            except psutil.NoSuchProcess:
+                pass
+        return True
+    except Exception as exc:
+        log.warning(f"Impossibile riprendere il processo locale (pid {pid}): {exc}")
+        return False
+
+
+def _termina_albero_locale(pid: int, timeout: float = 10.0) -> bool:
+    """terminate() sull'intero albero, poi kill() su chi e' ancora vivo dopo
+    il timeout — stesso comportamento in due passi di 'docker kill' (che
+    manda SIGTERM e poi SIGKILL dopo la grace period)."""
+    try:
+        processi = _processo_e_figli(pid)
+        for p in processi:
+            try:
+                p.terminate()
+            except psutil.NoSuchProcess:
+                pass
+        _, ancora_vivi = psutil.wait_procs(processi, timeout=timeout)
+        for p in ancora_vivi:
+            try:
+                p.kill()
+            except psutil.NoSuchProcess:
+                pass
+        return True
+    except Exception as exc:
+        log.warning(f"Impossibile terminare il processo locale (pid {pid}): {exc}")
+        return False
+
+
 def metti_in_pausa_container(nome_container: str) -> bool:
     """
-    Comando diretto (docker pause), chiamato dalla route non appena
-    l'operatore clicca "Metti in pausa" — non c'e' bisogno che il ciclo
-    di lettura dell'output se ne accorga: il container si congela a
-    livello di sistema operativo (cgroup freeze), la lettura dello
-    stdout in real_pipeline.py restera' semplicemente in attesa di
-    nuove righe finche' non viene ripreso.
+    Comando diretto, chiamato dalla route non appena l'operatore clicca
+    "Metti in pausa" — non c'e' bisogno che il ciclo di lettura
+    dell'output se ne accorga: il container/processo si congela a livello
+    di sistema operativo (cgroup freeze per Docker, psutil.suspend() per
+    un processo nativo), la lettura dello stdout in real_pipeline.py
+    restera' semplicemente in attesa di nuove righe finche' non viene
+    ripreso. nome_container distingue da solo i due casi (vedi PREFISSO_LOCALE).
     """
+    if nome_container.startswith(PREFISSO_LOCALE):
+        return _sospendi_albero_locale(int(nome_container[len(PREFISSO_LOCALE):]))
     try:
         subprocess.run(["docker", "pause", nome_container], capture_output=True, text=True, timeout=10)
         return True
@@ -260,6 +346,8 @@ def metti_in_pausa_container(nome_container: str) -> bool:
 
 
 def riprendi_container(nome_container: str) -> bool:
+    if nome_container.startswith(PREFISSO_LOCALE):
+        return _riprendi_albero_locale(int(nome_container[len(PREFISSO_LOCALE):]))
     try:
         subprocess.run(["docker", "unpause", nome_container], capture_output=True, text=True, timeout=10)
         return True
@@ -269,6 +357,8 @@ def riprendi_container(nome_container: str) -> bool:
 
 
 def annulla_container(nome_container: str) -> bool:
+    if nome_container.startswith(PREFISSO_LOCALE):
+        return _termina_albero_locale(int(nome_container[len(PREFISSO_LOCALE):]))
     try:
         subprocess.run(["docker", "kill", nome_container], capture_output=True, text=True, timeout=10)
         return True
@@ -340,43 +430,18 @@ def log_elaborazione(db: Session, elaborazione: Elaborazione, messaggio: str, li
     getattr(log, livello.value if livello != LivelloLog.warning else "warning")(messaggio)
 
 
-def _esegui_container(nome_servizio: str, db: Session, elaborazione: Elaborazione) -> None:
+def _leggi_output_processo(processo, db: Session, elaborazione: Elaborazione, nome_servizio: str) -> None:
     """
-    Esegue un container Docker Compose e ne trasmette l'output riga per
-    riga nel log dell'elaborazione MAN MANO che viene prodotto (non alla
-    fine): pipeline.py logga gia' da solo il progresso in formato
-    "[i/N] nome_file.pdf" durante l'estrazione OCR — usiamo lo stesso
-    formato anche nel backend finto (fake_pipeline.py) cosi' l'interfaccia
-    puo' mostrare "X di Y" a prescindere da quale backend sia attivo.
-
-    Il container riceve un nome univoco (--name) e viene salvato su
-    elaborazione.nome_container: e' quello che le route di pausa/ripresa/
-    annullamento useranno per agire direttamente sul container con
-    "docker pause/unpause/kill", senza dover coordinarsi con questo
-    ciclo di lettura (che semplicemente si blocca in attesa di nuove
-    righe mentre il container e' in pausa, e termina quando viene ucciso).
-
-    Presuppone: rete Docker esterna "ats-pipeline_default" gia' creata,
-    container "ats-ollama" gia' in esecuzione su quella rete (vedi
-    docker-compose.ollama.yml), e comando "docker" disponibile nel PATH
-    di chi esegue l'app web (Docker Desktop + WSL2 integration attiva).
+    Trasmette l'output (container Docker o processo nativo, indifferentemente
+    — vedi _esegui_container_docker/_esegui_processo_locale) riga per riga
+    nel log dell'elaborazione MAN MANO che viene prodotto (non alla fine):
+    pipeline.py logga gia' da solo il progresso in formato "[i/N] nome_file.pdf"
+    durante l'estrazione OCR — usiamo lo stesso formato anche nel backend
+    finto (fake_pipeline.py) cosi' l'interfaccia puo' mostrare "X di Y" a
+    prescindere da quale backend sia attivo. Condivisa dai due runner cosi'
+    il comportamento visibile in UI resta identico a prescindere da
+    PIPELINE_RUNNER.
     """
-    nome_container = f"ats-{nome_servizio}-{str(elaborazione.id)[:8]}"
-    elaborazione.nome_container = nome_container
-    db.commit()
-
-    comando = [
-        "docker", "compose", "-p", "ats-webapp",
-        "run", "--name", nome_container, "--rm", nome_servizio,
-    ]
-    log.info(f"Eseguo: {' '.join(comando)}")
-
-    processo = subprocess.Popen(
-        comando, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, encoding="utf-8", errors="replace", bufsize=1,
-        universal_newlines=True, cwd=str(RADICE_PROGETTO),
-    )
-
     ultima_riga_progresso = None
     for riga in processo.stdout:
         riga = riga.rstrip()
@@ -415,7 +480,103 @@ def _esegui_container(nome_servizio: str, db: Session, elaborazione: Elaborazion
         db.refresh(elaborazione)
         if elaborazione.richiesta_controllo == "annulla":
             raise ElaborazioneAnnullata()
-        raise RuntimeError(f"Container '{nome_servizio}' terminato con errore (codice {codice_uscita})")
+        raise RuntimeError(f"Fase '{nome_servizio}' terminata con errore (codice {codice_uscita})")
+
+
+def _esegui_container_docker(nome_servizio: str, db: Session, elaborazione: Elaborazione) -> None:
+    """
+    Esegue un container Docker Compose. Il container riceve un nome
+    univoco (--name) e viene salvato su elaborazione.nome_container: e'
+    quello che le route di pausa/ripresa/annullamento useranno per agire
+    direttamente sul container con "docker pause/unpause/kill", senza
+    dover coordinarsi con il ciclo di lettura (che semplicemente si
+    blocca in attesa di nuove righe mentre il container e' in pausa, e
+    termina quando viene ucciso).
+
+    Presuppone: rete Docker esterna "ats-pipeline_default" gia' creata,
+    container "ats-ollama" gia' in esecuzione su quella rete (vedi
+    docker-compose.ollama.yml), e comando "docker" disponibile nel PATH
+    di chi esegue l'app web (Docker Desktop + WSL2 integration attiva).
+    """
+    nome_container = f"ats-{nome_servizio}-{str(elaborazione.id)[:8]}"
+    elaborazione.nome_container = nome_container
+    db.commit()
+
+    comando = [
+        "docker", "compose", "-p", "ats-webapp",
+        "run", "--name", nome_container, "--rm", nome_servizio,
+    ]
+    log.info(f"Eseguo: {' '.join(comando)}")
+
+    processo = subprocess.Popen(
+        comando, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace", bufsize=1,
+        universal_newlines=True, cwd=str(RADICE_PROGETTO),
+    )
+    _leggi_output_processo(processo, db, elaborazione, nome_servizio)
+
+
+def _esegui_processo_locale(nome_servizio: str, db: Session, elaborazione: Elaborazione) -> None:
+    """
+    Runner nativo (PIPELINE_RUNNER=local, per un server senza Docker/WSL2):
+    lancia docker/run_fase.py con l'interprete Python dedicato alla
+    pipeline (PIPELINE_PYTHON — ambiente separato da quello della webapp,
+    ha torch/easyocr/ecc.), invece di un container Docker. E' lo stesso
+    identico script eseguito nei container Docker, qui lanciato come
+    processo nativo invece che in un'immagine — stesso comportamento per
+    fase, stesso parsing dell'output.
+
+    I path assoluti /dati e /app/OUTPUT_FLUSSO_CANNABIS_FINALE.xlsx dentro
+    run_fase.py sono sovrascrivibili da ATS_DATI_DIR/ATS_TEMPLATE_EXCEL
+    (vedi run_fase.py): qui passiamo la STESSA DATI_DIR della webapp — in
+    modalita' Docker serve il bind mount ./dati perche' il container ha un
+    filesystem isolato, qui invece webapp e pipeline girano sulla stessa
+    macchina e vedono direttamente la stessa cartella, senza bisogno di
+    nessun volume.
+
+    PYTHONUTF8/PYTHONIOENCODING forzati perche' la console di Windows Server
+    di solito non e' UTF-8 di default (cp1252) — altrimenti caratteri
+    accentati nei log/JSON della pipeline romperebbero la lettura riga per
+    riga qui sotto (vedi anche errors="replace" sulla Popen, difesa in piu').
+    """
+    if not PIPELINE_PYTHON or not PIPELINE_DIR:
+        raise RuntimeError(
+            "PIPELINE_RUNNER=local richiede PIPELINE_PYTHON e PIPELINE_DIR "
+            "nel .env (interprete e cartella dell'ambiente Python dedicato "
+            "alla pipeline)."
+        )
+
+    script = Path(PIPELINE_DIR) / "docker" / "run_fase.py"
+    comando = [PIPELINE_PYTHON, str(script), nome_servizio]
+    log.info(f"Eseguo: {' '.join(comando)}")
+
+    ambiente = os.environ.copy()
+    ambiente["PYTHONUTF8"] = "1"
+    ambiente["PYTHONIOENCODING"] = "utf-8"
+    ambiente["ATS_DATI_DIR"] = str(DATI_DIR)
+    ambiente["ATS_TEMPLATE_EXCEL"] = str(RADICE_PROGETTO / "OUTPUT_FLUSSO_CANNABIS_FINALE.xlsx")
+
+    processo = subprocess.Popen(
+        comando, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace", bufsize=1,
+        universal_newlines=True, cwd=str(PIPELINE_DIR), env=ambiente,
+    )
+
+    elaborazione.nome_container = f"{PREFISSO_LOCALE}{processo.pid}"
+    db.commit()
+
+    _leggi_output_processo(processo, db, elaborazione, nome_servizio)
+
+
+def _esegui_container(nome_servizio: str, db: Session, elaborazione: Elaborazione) -> None:
+    """Dispatcher: sceglie il runner in base a PIPELINE_RUNNER. Le funzioni
+    avvia_*_reale() chiamano sempre e solo questa, senza sapere quale dei
+    due runner sia effettivamente attivo — vedi _esegui_container_docker/
+    _esegui_processo_locale per il comportamento di ciascuno."""
+    if PIPELINE_RUNNER == "local":
+        _esegui_processo_locale(nome_servizio, db, elaborazione)
+    else:
+        _esegui_container_docker(nome_servizio, db, elaborazione)
 
 
 def _parse_data_italiana(valore):

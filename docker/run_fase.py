@@ -15,9 +15,23 @@ Percorsi (cartelle condivise via volume Docker, vedi docker-compose.yml):
 """
 
 import logging
+import os
 import sys
 import shutil
 from pathlib import Path
+
+# Eseguito sia dentro un container Docker (dove questo file vive appiattito
+# in /app insieme a tutti gli altri script della pipeline, vedi docker/
+# Dockerfile) sia come processo nativo lanciato da app/real_pipeline.py
+# (PIPELINE_RUNNER=local, vedi _esegui_processo_locale) — in quel secondo
+# caso questo file resta dentro <PIPELINE_DIR>/docker/, separato dagli
+# altri moduli (phase1_preprocess.py, pipeline.py, ecc. restano alla radice
+# di PIPELINE_DIR). Python aggiunge solo la cartella DI QUESTO file a
+# sys.path, quindi senza questa riga "import pipeline" fallirebbe in
+# modalita' nativa. In un container questo path aggiuntivo punta a "/"
+# (inesistente/non rilevante) e non cambia nulla: gli import continuano a
+# risolversi tramite sys.path[0]="/app" come prima.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # Configurato QUI, centralmente, prima di eseguire qualunque fase: la fase
 # "preprocessing" importa solo phase1_preprocess.py, che si limita a
@@ -31,7 +45,12 @@ from pathlib import Path
 # pipeline.py per le altre fasi resta innocuo.
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-DATI = Path("/dati")
+# Default invariati (modalita' Docker, dove /dati e /app sono il filesystem
+# del container — vedi docker-compose.yml). ATS_DATI_DIR/ATS_TEMPLATE_EXCEL
+# li sovrascrivono in modalita' nativa (PIPELINE_RUNNER=local), dove non
+# esiste nessun container e questi path devono essere cartelle Windows vere
+# — vedi _esegui_processo_locale in app/real_pipeline.py.
+DATI = Path(os.environ.get("ATS_DATI_DIR", "/dati"))
 
 
 def fase_preprocessing():
@@ -104,7 +123,7 @@ def fase_excel():
 
     output_dir = DATI / "output"
     ricette_dir = DATI / "ricette"
-    template_path = Path("/app/OUTPUT_FLUSSO_CANNABIS_FINALE.xlsx")
+    template_path = Path(os.environ.get("ATS_TEMPLATE_EXCEL", "/app/OUTPUT_FLUSSO_CANNABIS_FINALE.xlsx"))
     excel_regione = next((DATI / "excel_regione").glob("*.xlsx"), None)
 
     if excel_regione is None:
