@@ -16,7 +16,15 @@ from app.database import Base, engine, SessionLocal
 from app.config_helper import assicura_pipeline_reale
 from app.auth import RedirectLogin
 from app.real_pipeline import recupera_elaborazioni_orfane
+from app.storage import verifica_storage_produzione
 from app.routers import auth_router, dashboard, lotti, archivio, impostazioni
+
+# APP_ENV=production: l'app si rifiuta di partire se lo storage configurato
+# non e' valido o punta ancora alla cartella finta di sviluppo — vedi
+# app/storage.py::verifica_storage_produzione per il motivo (bug storico
+# gia' capitato: scrittura silenziosa in locale invece che su SharePoint).
+# No-op fuori produzione (comportamento di sviluppo invariato).
+verifica_storage_produzione()
 
 # Crea le tabelle se non esistono (per dev; in produzione si userebbe Alembic)
 Base.metadata.create_all(bind=engine)

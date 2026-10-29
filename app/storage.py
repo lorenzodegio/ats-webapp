@@ -6,6 +6,7 @@ Docker (se usato) scrive ancora in ./dati per la pipeline OCR; dopo ogni
 fase copiamo PDF/PNG in media/lotti/<id>/pagine/ e il client li prende
 solo da lì (route autenticata, non cartella pubblica).
 """
+import os
 import re
 import shutil
 from pathlib import Path
@@ -23,27 +24,49 @@ RICETTE_STAGING_IMAGES = DATI_DIR / "ricette_staging" / "images"
 RICETTE_STAGING_PDFS = DATI_DIR / "ricette_staging" / "pdfs"
 RICETTE = DATI_DIR / "ricette"
 
+APP_ENV = os.environ.get("APP_ENV", "development").strip().lower()
+
+# Backend dello storage permanente ("onedrive": comportamento storico,
+# cartella OneDrive for Business sincronizzata; "local": cartella Windows
+# fissa, pensata per il server di produzione senza sincronizzazione cloud).
+# Default "local" in produzione (niente OneDrive sul server Windows),
+# "onedrive" altrove — invariato per lo sviluppo su questa macchina.
+STORAGE_BACKEND = os.environ.get(
+    "STORAGE_BACKEND", "local" if APP_ENV == "production" else "onedrive"
+).strip().lower()
+# Cartella radice per il backend "local" — nessun default: va configurata
+# esplicitamente, non indovinata.
+STORAGE_LOCAL_DIR = os.environ.get("STORAGE_LOCAL_DIR", "").strip() or None
+
 _CACHE_RADICE_SHAREPOINT = {}
 
 
-def radice_sharepoint() -> Path:
+class ErroreStorageNonValido(RuntimeError):
+    """Il percorso di storage configurato non esiste o non e' accettabile.
+    In produzione questo deve fermare l'operazione (o l'avvio dell'app),
+    mai ricadere in silenzio su un'altra cartella — vedi il bug reale
+    descritto sotto _risolvi_backend_onedrive()."""
+
+
+def _risolvi_backend_onedrive() -> Path:
     """
-    Radice dello storage "SharePoint": in produzione la cartella OneDrive
-    for Business sincronizzata sulla macchina ATS (Configurazione.sharepoint_base_path),
-    altrimenti SHAREPOINT_FINTO (sviluppo, macchine senza OneDrive).
+    Backend "onedrive" (comportamento storico): in produzione la cartella
+    OneDrive for Business sincronizzata sulla macchina ATS
+    (Configurazione.sharepoint_base_path), altrimenti SHAREPOINT_FINTO
+    (sviluppo, macchine senza OneDrive).
 
     Il percorso risolto viene messo in cache di processo SOLO una volta
     trovato valido: a quel punto non ha senso rileggerlo ad ogni chiamata
     (tab "Sistema" di Impostazioni e' sola lettura, quindi non cambia a
-    server in esecuzione). Ma se al momento della risoluzione la cartella
-    OneDrive non e' ancora disponibile (es. OneDrive non ha ancora montato
-    la sincronizzazione all'avvio del server), NON mettiamo in cache il
-    fallback SHAREPOINT_FINTO: altrimenti un intero lotto, anche lungo
-    giorni, finirebbe scritto silenziosamente nella cartella finta locale
-    invece che su SharePoint, senza modo di riprendersi finche' il
-    processo non viene riavviato (bug reale riscontrato il 2026-10-02:
-    lotto DICEMBRE scritto per intero in sharepoint_finto/ perche' il
-    server era partito prima che OneDrive montasse la cartella).
+    server in esecuzione). Fuori produzione, se al momento della
+    risoluzione la cartella OneDrive non e' ancora disponibile, si ricade
+    su SHAREPOINT_FINTO senza bloccare (comportamento invariato, utile in
+    sviluppo). In produzione (APP_ENV=production) questo fallback e'
+    DISABILITATO apposta: solleva ErroreStorageNonValido invece di
+    scrivere silenziosamente in locale — e' il meccanismo dietro un
+    incidente reale gia' documentato (lotto DICEMBRE scritto per intero in
+    sharepoint_finto/ perche' il server era partito prima che OneDrive
+    montasse la cartella, scoperto solo a lotto finito).
     """
     percorso = None
     try:
@@ -64,7 +87,72 @@ def radice_sharepoint() -> Path:
     if percorso is not None:
         _CACHE_RADICE_SHAREPOINT["percorso"] = percorso
         return percorso
+
+    if APP_ENV == "production":
+        raise ErroreStorageNonValido(
+            "Backend storage 'onedrive': Configurazione.sharepoint_base_path "
+            "non e' impostato o non punta a una cartella esistente. In "
+            "produzione l'operazione si ferma qui invece di scrivere in "
+            "sharepoint_finto/ — correggi il percorso in Impostazioni o "
+            "passa a STORAGE_BACKEND=local."
+        )
     return _CACHE_RADICE_SHAREPOINT.get("percorso") or SHAREPOINT_FINTO
+
+
+def _risolvi_backend_locale() -> Path:
+    """
+    Backend "local": una cartella Windows fissa (STORAGE_LOCAL_DIR), senza
+    nessuna dipendenza da OneDrive/SharePoint — il backend di default in
+    produzione sul server Windows (niente sincronizzazione cloud li').
+    """
+    if not STORAGE_LOCAL_DIR:
+        raise ErroreStorageNonValido(
+            "STORAGE_BACKEND=local ma STORAGE_LOCAL_DIR non e' impostato nel .env."
+        )
+    percorso = Path(STORAGE_LOCAL_DIR)
+    if not percorso.is_dir():
+        if APP_ENV == "production":
+            raise ErroreStorageNonValido(
+                f"Backend storage 'local': la cartella configurata non esiste: {percorso}"
+            )
+        # Fuori produzione, comodita' per chi prova il backend 'local' in
+        # sviluppo: la crea invece di bloccare.
+        percorso.mkdir(parents=True, exist_ok=True)
+    return percorso
+
+
+def radice_sharepoint() -> Path:
+    """
+    Radice dello storage permanente dei file (PDF/PNG/Excel/JSON) — il nome
+    resta quello storico per non dover toccare le decine di chiamate gia'
+    esistenti in tutto il backend; delega al backend attivo (STORAGE_BACKEND):
+      - "onedrive" (default fuori produzione): vedi _risolvi_backend_onedrive.
+      - "local" (default in produzione): vedi _risolvi_backend_locale.
+    Un futuro backend per Microsoft Graph API (OneDrive senza
+    sincronizzazione locale) si aggiungerebbe qui con la stessa interfaccia
+    (una funzione che ritorna/accetta percorsi, senza toccare i chiamanti).
+    """
+    if STORAGE_BACKEND == "local":
+        return _risolvi_backend_locale()
+    return _risolvi_backend_onedrive()
+
+
+def verifica_storage_produzione() -> None:
+    """
+    Chiamata una sola volta all'avvio (app/main.py) quando APP_ENV=production:
+    l'app si RIFIUTA DI PARTIRE se lo storage configurato non e' valido o
+    punta a sharepoint_finto — invece di scoprirlo a meta' di un lotto reale
+    (vedi il bug storico citato sopra). No-op fuori produzione.
+    """
+    if APP_ENV != "production":
+        return
+    percorso = radice_sharepoint().resolve()  # solleva ErroreStorageNonValido se non valido
+    if percorso == SHAREPOINT_FINTO.resolve():
+        raise ErroreStorageNonValido(
+            "APP_ENV=production ma lo storage risolto punta a sharepoint_finto/ "
+            "— controlla STORAGE_BACKEND/STORAGE_LOCAL_DIR o "
+            "Configurazione.sharepoint_base_path prima di avviare l'app."
+        )
 
 
 def nome_file_sicuro(testo: str, default: str = "output") -> str:
