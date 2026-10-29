@@ -16,7 +16,7 @@ from app.database import Base, engine, SessionLocal
 from app.config_helper import assicura_pipeline_reale
 from app.auth import RedirectLogin
 from app.real_pipeline import recupera_elaborazioni_orfane
-from app.storage import verifica_storage_produzione
+from app.storage import verifica_storage_produzione, APP_ENV
 from app.routers import auth_router, dashboard, lotti, archivio, impostazioni
 
 # APP_ENV=production: l'app si rifiuta di partire se lo storage configurato
@@ -26,8 +26,13 @@ from app.routers import auth_router, dashboard, lotti, archivio, impostazioni
 # No-op fuori produzione (comportamento di sviluppo invariato).
 verifica_storage_produzione()
 
-# Crea le tabelle se non esistono (per dev; in produzione si userebbe Alembic)
-Base.metadata.create_all(bind=engine)
+# Crea le tabelle se non esistono — SOLO fuori produzione. In produzione lo
+# schema e' gestito da Alembic (cartella alembic/, baseline nella prima
+# revisione): create_all() e' solo additivo e non saprebbe mai applicare
+# una modifica a una colonna esistente, quindi va disattivato una volta che
+# il DB ha dati reali — vedi DEPLOY_WINDOWS.md per "alembic upgrade head".
+if APP_ENV != "production":
+    Base.metadata.create_all(bind=engine)
 _db_avvio = SessionLocal()
 try:
     assicura_pipeline_reale(_db_avvio)
@@ -41,7 +46,18 @@ finally:
 
 app = FastAPI(title="ATS Gestione Prescrizioni Cannabis")
 
-SECRET_KEY = os.environ.get("SESSION_SECRET_KEY", "cambia-questa-chiave-in-produzione")
+SECRET_KEY = os.environ.get("SESSION_SECRET_KEY", "").strip()
+if not SECRET_KEY:
+    if APP_ENV == "production":
+        raise RuntimeError(
+            "SESSION_SECRET_KEY non impostata: obbligatoria in produzione "
+            "(APP_ENV=production), l'app non parte senza — genera una chiave "
+            "casuale e mettila nel .env, vedi DEPLOY_WINDOWS.md."
+        )
+    # Fuori produzione un default fisso va benissimo: comodo per lo
+    # sviluppo locale (sessioni stabili tra un riavvio e l'altro di
+    # uvicorn), nessun rischio perche' non e' un ambiente esposto.
+    SECRET_KEY = "cambia-questa-chiave-in-produzione"
 # max_age=None (invece del default Starlette di 14 giorni): il cookie di
 # sessione non ha piu' un attributo di scadenza, quindi il browser lo
 # scarta alla chiusura completa (non alla chiusura di una singola scheda)

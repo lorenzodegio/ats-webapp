@@ -41,7 +41,21 @@ def crea_utenti(db):
         print("Utenti gia' esistenti, salto la creazione.")
         return db.query(Utente).filter(Utente.username == "admin").first()
 
-    password = getpass.getpass("Password per l'utente admin (default 'admin123' se vuoto): ") or "admin123"
+    # ADMIN_INITIAL_PASSWORD impostata (anche da install.ps1, che la chiede
+    # con Read-Host -AsSecureString): uso diretto, NIENTE prompt interattivo
+    # e NESSUN default — se vuota lo script si ferma, non ricade mai su
+    # "admin123" in un'installazione automatizzata. Se la variabile non e'
+    # affatto impostata, resta il prompt interattivo di sempre (uso manuale
+    # locale, invariato).
+    if "ADMIN_INITIAL_PASSWORD" in os.environ:
+        password = os.environ["ADMIN_INITIAL_PASSWORD"]
+        if not password:
+            raise SystemExit(
+                "ADMIN_INITIAL_PASSWORD e' impostata ma vuota: nessun default "
+                "ammesso per l'utente admin, imposta una password vera."
+            )
+    else:
+        password = getpass.getpass("Password per l'utente admin (default 'admin123' se vuoto): ") or "admin123"
     admin = Utente(
         username="admin", password_hash=hash_password(password),
         nome="Amministratore ATS", email="admin@ats-insubria.example",
