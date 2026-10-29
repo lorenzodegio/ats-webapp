@@ -10,3 +10,4 @@ openpyxl
 ollama
 easyocr
 torch
+psutil

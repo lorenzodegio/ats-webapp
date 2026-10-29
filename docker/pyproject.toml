@@ -16,6 +16,7 @@ dependencies = [
     "ollama",
     "easyocr",
     "torch",
+    "psutil",
 ]
 
 # Progetto SEPARATO dalla webapp (pyproject.toml alla radice del repo):
