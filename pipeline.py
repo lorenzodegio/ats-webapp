@@ -23,7 +23,10 @@ Utilizzo:
 import argparse
 import json
 import logging
+import os
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -39,7 +42,7 @@ import phase4_excel
 
 def esegui_estrazione(input_dir: Path, output_dir: Path, solo_test: bool,
                        gpu: int, model: str, excel_path: Path = None,
-                       on_ricetta_completata=None) -> dict:
+                       on_ricetta_completata=None, parallelismo: int = None) -> dict:
     """
     Passo 1 — estrazione OCR. Replica la logica di ocr_cannabis.main(),
     ma come funzione richiamabile (main() usa argparse.parse_args() sui
@@ -55,7 +58,20 @@ def esegui_estrazione(input_dir: Path, output_dir: Path, solo_test: bool,
     ricetta (successo o errore) con (indice, totale) — usato dalla GUI
     per aggiornare la barra di avanzamento e il tempo residuo stimato.
     Nessun effetto sul comportamento esistente se non viene passato.
+
+    parallelismo: quante ricette elaborare in parallelo (thread, non
+    processi — ocr_cannabis.estrai_dati() aspetta soprattutto risposte
+    HTTP da Ollama, I/O che rilascia il GIL, quindi i thread bastano senza
+    la complessita' di duplicare in ogni processo i modelli EasyOCR gia'
+    caricati). Default: PIPELINE_PARALLELISMO da env, altrimenti 1
+    (sequenziale, comportamento IDENTICO a prima — nessuna modifica al path
+    con parallelismo=1, stesso ordine, stesso codice). Con OLLAMA_NUM_PARALLEL=1
+    lato server Ollama, piu' di 1 qui in pratica si accoda comunque lato
+    server: serve soprattutto se OLLAMA_NUM_PARALLEL sul server e' >1 (vedi
+    benchmark.py per trovare la combinazione migliore sull'hardware reale).
     """
+    if parallelismo is None:
+        parallelismo = int(os.environ.get("PIPELINE_PARALLELISMO", "1"))
     ocr_cannabis.NUM_GPU = gpu
     ocr_cannabis.PERCORSO_REGIONE = excel_path
     if model:
@@ -85,8 +101,11 @@ def esegui_estrazione(input_dir: Path, output_dir: Path, solo_test: bool,
     output_dir.mkdir(parents=True, exist_ok=True)
     risultati, errori = [], []
     inizio = datetime.now()
+    contatore_lock = threading.Lock()
+    completati = 0
 
-    for i, pdf in enumerate(pdf_files, 1):
+    def _elabora_una_ricetta(pdf: Path):
+        nonlocal completati
         try:
             dati = ocr_cannabis.estrai_dati(pdf)
             if dati:
@@ -100,23 +119,39 @@ def esegui_estrazione(input_dir: Path, output_dir: Path, solo_test: bool,
         except Exception as e:
             errori.append(pdf.name)
             log.error(f"    -> Errore: {e}")
+
         # Contatore "[i/N]" stampato a fine elaborazione della ricetta, non
         # all'inizio: la barra di avanzamento in webapp (app/progresso.py:
         # _percentuale_proporzionale, che legge l'ultima riga "[i/N]" del
         # log) deve avanzare solo quando la ricetta e' DAVVERO completata,
         # non quando e' solo iniziata — altrimenti l'ultima ricetta porta
-        # la barra al tetto della fase (80%) nell'istante in cui parte,
-        # non quando finisce. Questo e' il loop REALMENTE eseguito dalla
-        # pipeline Docker (ocr_cannabis.py ha una copia della stessa
-        # logica nel suo main(), usata pero' solo quando lo si lancia in
-        # standalone, mai da qui).
-        log.info(f"  [{i}/{len(pdf_files)}] {pdf.name}")
+        # la barra al tetto della fase (80%) nell'istante in cui parte, non
+        # quando finisce. Con parallelismo>1 "i" e' un conteggio di
+        # completamenti (protetto da lock), non la posizione nella lista
+        # originale — l'ordine di completamento puo' differire dall'ordine
+        # dei file, la barra avanza comunque in modo monotono e corretto.
+        with contatore_lock:
+            completati += 1
+            indice_completamento = completati
+        log.info(f"  [{indice_completamento}/{len(pdf_files)}] {pdf.name}")
 
         if on_ricetta_completata is not None:
             try:
-                on_ricetta_completata(i, len(pdf_files))
+                on_ricetta_completata(indice_completamento, len(pdf_files))
             except Exception as e:
                 log.warning(f"  Errore nel callback di avanzamento (ignorato): {e}")
+
+    if parallelismo <= 1:
+        # Path sequenziale invariato — stesso ordine, stesso identico
+        # comportamento di sempre, nessun thread coinvolto.
+        for pdf in pdf_files:
+            _elabora_una_ricetta(pdf)
+    else:
+        log.info(f"  Parallelismo attivo: {parallelismo} ricette alla volta")
+        with ThreadPoolExecutor(max_workers=parallelismo) as pool:
+            futures = [pool.submit(_elabora_una_ricetta, pdf) for pdf in pdf_files]
+            for f in as_completed(futures):
+                f.result()  # rilancia qui eventuali eccezioni non previste (bug, non errori di estrazione)
 
     durata = (datetime.now() - inizio).total_seconds()
     riepilogo = {
@@ -231,12 +266,17 @@ def main():
     ap.add_argument("--template", type=Path, default=None,
                      help="File template Excel originale per il passo 4 "
                           "(es. OUTPUT_FLUSSO_CANNABIS_FINALE.xlsx) — richiesto se non usi --salta-excel")
+    ap.add_argument("--parallelismo", type=int, default=None,
+                     help="Ricette elaborate in parallelo (thread). Default: PIPELINE_PARALLELISMO "
+                          "da env, altrimenti 1 (sequenziale, comportamento storico). Vedi benchmark.py "
+                          "per trovare la combinazione migliore su questo hardware.")
     args = ap.parse_args()
 
     inizio_totale = datetime.now()
 
     riepilogo_estrazione = esegui_estrazione(
-        args.ricette, args.output, args.test, args.gpu, args.model, args.excel
+        args.ricette, args.output, args.test, args.gpu, args.model, args.excel,
+        parallelismo=args.parallelismo,
     )
 
     if riepilogo_estrazione["elaborati"] == 0:
