@@ -1,8 +1,8 @@
 """baseline schema attuale
 
-Revision ID: 21237b92dfb5
+Revision ID: df27b01b163a
 Revises: 
-Create Date: 2026-10-29 15:14:34.934481
+Create Date: 2026-10-30 15:42:35.519774
 
 """
 from typing import Sequence, Union
@@ -13,7 +13,7 @@ import app.db_types
 
 
 # revision identifiers, used by Alembic.
-revision: str = '21237b92dfb5'
+revision: str = 'df27b01b163a'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -119,6 +119,35 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_lotti_mensili_stato'), 'lotti_mensili', ['stato'], unique=False)
+    op.create_table('profili_layout_etichetta',
+    sa.Column('id', app.db_types.GUID(), nullable=False),
+    sa.Column('farmacia_id', app.db_types.GUID(), nullable=False),
+    sa.Column('parole_guida_presenza', sa.JSON(), nullable=True),
+    sa.Column('rettangolo_etichetta_x1', sa.Float(), nullable=True),
+    sa.Column('rettangolo_etichetta_y1', sa.Float(), nullable=True),
+    sa.Column('rettangolo_etichetta_x2', sa.Float(), nullable=True),
+    sa.Column('rettangolo_etichetta_y2', sa.Float(), nullable=True),
+    sa.Column('pdf_esempio_path', sa.String(length=500), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=True),
+    sa.Column('updated_at', sa.DateTime(), nullable=True),
+    sa.ForeignKeyConstraint(['farmacia_id'], ['farmacie.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_profili_layout_etichetta_farmacia_id'), 'profili_layout_etichetta', ['farmacia_id'], unique=True)
+    op.create_table('campi_profilo_layout',
+    sa.Column('id', app.db_types.GUID(), nullable=False),
+    sa.Column('profilo_id', app.db_types.GUID(), nullable=False),
+    sa.Column('ordine', sa.Integer(), nullable=False),
+    sa.Column('nome_campo', sa.String(length=100), nullable=False),
+    sa.Column('parola_guida', sa.String(length=200), nullable=True),
+    sa.Column('rettangolo_x1', sa.Float(), nullable=True),
+    sa.Column('rettangolo_y1', sa.Float(), nullable=True),
+    sa.Column('rettangolo_x2', sa.Float(), nullable=True),
+    sa.Column('rettangolo_y2', sa.Float(), nullable=True),
+    sa.ForeignKeyConstraint(['profilo_id'], ['profili_layout_etichetta.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_campi_profilo_layout_profilo_id'), 'campi_profilo_layout', ['profilo_id'], unique=False)
     op.create_table('caricamenti_file',
     sa.Column('id', app.db_types.GUID(), nullable=False),
     sa.Column('lotto_id', app.db_types.GUID(), nullable=False),
@@ -255,6 +284,10 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_elaborazioni_stato'), table_name='elaborazioni')
     op.drop_table('elaborazioni')
     op.drop_table('caricamenti_file')
+    op.drop_index(op.f('ix_campi_profilo_layout_profilo_id'), table_name='campi_profilo_layout')
+    op.drop_table('campi_profilo_layout')
+    op.drop_index(op.f('ix_profili_layout_etichetta_farmacia_id'), table_name='profili_layout_etichetta')
+    op.drop_table('profili_layout_etichetta')
     op.drop_index(op.f('ix_lotti_mensili_stato'), table_name='lotti_mensili')
     op.drop_table('lotti_mensili')
     op.drop_table('configurazione')
