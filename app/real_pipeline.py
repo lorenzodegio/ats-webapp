@@ -333,6 +333,17 @@ def _scrivi_farmacie_per_pipeline(db: Session) -> None:
     except Exception as exc:
         log.warning(f"Impossibile scrivere farmacie.json per la pipeline: {exc}")
 
+    # Profili di layout etichetta (Impostazioni -> "Prompt farmacie"):
+    # stesso meccanismo di handoff di farmacie.json sopra, scritto nello
+    # stesso momento cosi' il container vede sempre la versione aggiornata
+    # ad ogni lotto (_pulisci_cartella_dati() svuota ./dati prima di ogni run).
+    from app.profili_layout_io import scrivi_json_pipeline as scrivi_profili_json
+    try:
+        percorso = scrivi_profili_json(db, DATI_DIR / "profili_layout.json")
+        log.info(f"Profili di layout etichetta scritti in {percorso}")
+    except Exception as exc:
+        log.warning(f"Impossibile scrivere profili_layout.json per la pipeline: {exc}")
+
 
 def log_elaborazione(db: Session, elaborazione: Elaborazione, messaggio: str, livello: LivelloLog = LivelloLog.info) -> None:
     db.add(LogElaborazione(elaborazione_id=elaborazione.id, messaggio=messaggio, livello=livello))

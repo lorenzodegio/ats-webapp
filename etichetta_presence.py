@@ -19,12 +19,17 @@ Richiede: opencv-python, scikit-image, easyocr (solo per il fallback)
     pip install opencv-python scikit-image easyocr --break-system-packages
 """
 
+import logging
 import re
 from dataclasses import dataclass
 
 import cv2
 import numpy as np
 from skimage.metrics import structural_similarity as ssim
+
+from profilo_layout_etichetta import ProfiloLayoutEtichetta, ottieni_profilo_farmacia
+
+log = logging.getLogger(__name__)
 
 PRICE_PATTERN = re.compile(r"\d+[.,]\d{2}")
 THC_PATTERN = re.compile(r"\d{1,2}\s*mg")
@@ -130,11 +135,25 @@ def find_template_region(page_gray: np.ndarray, template_gray: np.ndarray, searc
 
 
 def ocr_fallback(region_bgr: np.ndarray, reader, nome_farmacia: str = "") -> bool:
-    """Usato solo se SSIM è ambiguo/basso. Cerca gli STESSI ancoraggi già
-    usati per l'estrazione dei campi etichetta (prezzi, THC, nomi
-    paziente/medico, avvertenze, data preparazione, data scadenza) —
-    se l'etichetta è vera, di solito compare almeno uno di questi
-    elementi; un modulo prestampato vuoto non ne ha nessuno.
+    """Usato solo se SSIM è ambiguo/basso.
+
+    Se la farmacia ha un profilo di layout strutturato (vedi
+    profilo_layout_etichetta.py) CON parole-guida di presenza configurate,
+    il riconoscimento usa SOLO quelle — non un elenco generico (vedi
+    "Analisi di fattibilità - profilo di layout etichetta.docx", sezione
+    3.3: "Il riconoscimento della presenza usa le parole-guida della
+    farmacia, non un elenco generico"). Nessun fallback silenzioso sui
+    pattern generici in questo caso: se l'operatore ha definito le parole
+    per QUESTA farmacia, sono quelle a decidere.
+
+    Se il profilo non esiste (farmacia non ancora migrata) o esiste ma
+    senza parole di presenza (lista vuota — profilo incompleto, non
+    "assente": vedi profilo_layout_etichetta.ProfiloLayoutEtichetta), si
+    ricade sul comportamento di sempre: gli STESSI ancoraggi già usati per
+    l'estrazione dei campi etichetta (prezzi, THC, nomi paziente/medico,
+    avvertenze, data preparazione, data scadenza) — se l'etichetta è vera,
+    di solito compare almeno uno di questi elementi; un modulo prestampato
+    vuoto non ne ha nessuno.
 
     PRICE_PATTERN volutamente ESCLUSO da questo controllo (anche se
     resta definito sopra, per eventuale uso altrove): il totale della
@@ -143,15 +162,34 @@ def ocr_fallback(region_bgr: np.ndarray, reader, nome_farmacia: str = "") -> boo
     concretamente su un caso reale (Farmacia Tili, Vismara) dove quel
     numero, non l'etichetta, faceva scattare "presente" per errore.
     Non è un segnale specifico dell'etichetta, quindi non va usato qui.
+    NON reintrodurlo nel fallback sotto.
 
     nome_farmacia: se valorizzato e presente in PAROLE_ANCORA_EXTRA_PER_FARMACIA,
     aggiunge un controllo fuzzy sul nome/intestazione di QUELLA farmacia come
-    ulteriore ancoraggio — vedi commento sopra PAROLE_ANCORA_EXTRA_PER_FARMACIA.
-    Per ogni altra farmacia (valore di default "") il comportamento è
-    identico a prima, nessuna modifica.
+    ulteriore ancoraggio nel ramo di fallback — vedi commento sopra
+    PAROLE_ANCORA_EXTRA_PER_FARMACIA. Meccanismo transitorio: una farmacia
+    migrata a un profilo strutturato con parole di presenza non passa più
+    di qui (vedi sopra), quindi questa mappa può essere svuotata via via
+    che le farmacie vengono migrate, senza bisogno di toccare questa funzione.
     """
-    parole_extra = PAROLE_ANCORA_EXTRA_PER_FARMACIA.get(nome_farmacia)
     results = reader.readtext(region_bgr)
+
+    profilo = ottieni_profilo_farmacia(nome_farmacia)
+    if profilo is not None and profilo.parole_guida_presenza:
+        for _, text, conf in results:
+            if conf < 0.4:
+                continue
+            if _testo_contiene_parola_simile(text, profilo.parole_guida_presenza):
+                return True
+        return False
+    if profilo is not None and not profilo.parole_guida_presenza:
+        log.warning(
+            f"Profilo di layout presente per '{nome_farmacia}' ma senza parole-guida "
+            f"di presenza configurate — profilo incompleto, uso il fallback generico "
+            f"invece di trattarlo come farmacia senza profilo."
+        )
+
+    parole_extra = PAROLE_ANCORA_EXTRA_PER_FARMACIA.get(nome_farmacia)
     for _, text, conf in results:
         if conf < 0.4:
             continue

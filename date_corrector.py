@@ -25,12 +25,17 @@ import base64
 import logging
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 
 import torch
 import fitz
 import ollama
 import numpy as np
 from PIL import Image
+
+from profilo_layout_etichetta import (
+    CampoEtichettaConfig, DirezioneRitaglio, ottieni_profilo_farmacia,
+)
 
 log = logging.getLogger(__name__)
 
@@ -422,6 +427,26 @@ month, 4-digit year — add "20" to a 2-digit year).
 Return ONLY the date in GG/MM/AAAA format, nothing else — no explanation.
 If no valid preparation date is visible in this crop, return exactly: INCERTO
 """
+
+PROMPT_CROP_CAMPO_PROFILATO = """This image is a cropped region from an Italian pharmacy label, containing
+the field "{nome_campo}" — located using the guide word "{parola_guida}" configured for this pharmacy's layout.
+
+Read and transcribe ONLY the value of this field, exactly as written.
+Do not include the guide word itself, surrounding labels, or any other
+field that might be partially visible in this crop.
+
+Return ONLY the value, nothing else — no explanation, no formatting.
+If not clearly readable, or if this crop does not actually contain the
+"{nome_campo}" field, return exactly: INCERTO
+
+Note: this is a generic prompt, not calibrated field-by-field like the
+other PROMPT_CROP_* in this file (es. PROMPT_CROP_DATA_PREPARAZIONE) —
+va raffinato per campo quando si avranno casi reali su cui tararlo.
+"""
+
+PROMPT_CROP_CALIBRATI_PER_CAMPO = {
+    "data_etichetta_preparazione": PROMPT_CROP_DATA_PREPARAZIONE,
+}
 
 
 def _distanza_levenshtein_semplice(a: str, b: str) -> int:
@@ -1159,6 +1184,195 @@ class DateCorrector:
             log.info(f"  data_etichetta_preparazione recuperata da crop dinamico: {valore}")
         else:
             log.info("  data_etichetta_preparazione: crop trovato ma nessuna data plausibile, resta invariato")
+
+        return dati
+
+    def _localizza_campo_profilato_e_crop(self, img: Image.Image, reader, campo: CampoEtichettaConfig,
+                                           area_ricerca: tuple):
+        """
+        Modo A / Modo B per UN campo di un profilo di layout strutturato
+        (vedi profilo_layout_etichetta.py) — stesso pattern già in
+        produzione per "Prep." (_localizza_prep_e_crop_in_area), qui
+        generalizzato a qualunque parola-guida/area definita dall'operatore.
+
+        Modo A: cerca campo.parola_guida DENTRO area_ricerca (l'area
+        dell'etichetta — vedi correggi_campi_profilati per come viene
+        determinata) tramite trova_box_testo() già esistente, poi ritaglia
+        usando campo.estensione (o un margine di default generoso a destra,
+        se l'estensione non è stata specificata).
+
+        Modo B: se la parola non si trova (o il campo non ne ha una),
+        ricade su campo.rettangolo_fallback — l'area che l'operatore ha
+        disegnato a mano, in coordinate relative alla pagina intera.
+
+        LIMITE NOTO: l'esclusione delle parole in campo.parole_escluse usa
+        lo stesso controllo di trova_box_testo() (solo sullo stesso token
+        OCR del match) — non la finestra multi-token proposta nella
+        revisione del prototipo isolato. Estendere trova_box_testo() a un
+        controllo multi-token cambierebbe il comportamento anche per
+        "Prep." (già in produzione): rimandato a quando ci sarà un caso
+        reale su cui verificarlo, per non rischiare quel percorso qui.
+
+        Ritorna (crop, metodo) con metodo in ("MODO_A", "MODO_B_RIPIEGO", "FALLITO").
+        """
+        x1_area, y1_area, x2_area, y2_area = area_ricerca
+
+        if campo.parola_guida:
+            pattern = re.escape(re.sub(r'[^A-Za-z]', '', campo.parola_guida).upper())
+            if pattern:
+                sotto_area = img.crop((x1_area, y1_area, x2_area, y2_area))
+                escludi = "|".join(
+                    re.escape(re.sub(r'[^A-Za-z]', '', p).upper()) for p in campo.parole_escluse if p
+                ) or None
+                box = trova_box_testo(sotto_area, reader, pattern=pattern, escludi_pattern=escludi, min_conf=0.15)
+                if box is not None:
+                    bx1, by1, bx2, by2 = box
+                    bx1 += x1_area; bx2 += x1_area
+                    by1 += y1_area; by2 += y1_area
+
+                    ext = campo.estensione
+                    if ext is None:
+                        # stesso margine di default già usato per "Prep."
+                        roi = {"x1": int(bx1), "y1": int(by1) - 15, "x2": int(bx2) + 400, "y2": int(by2) + 60}
+                    else:
+                        img_w, img_h = img.width, img.height
+                        if campo.direzione == DirezioneRitaglio.DESTRA:
+                            cx1 = bx2 + int(ext.offset_x_rel * img_w)
+                            cy1 = by1 + int(ext.offset_y_rel * img_h)
+                        elif campo.direzione == DirezioneRitaglio.SOTTO:
+                            cx1 = bx1 + int(ext.offset_x_rel * img_w)
+                            cy1 = by2 + int(ext.offset_y_rel * img_h)
+                        else:  # ENTRAMBI
+                            cx1 = bx2 + int(ext.offset_x_rel * img_w)
+                            cy1 = by2 + int(ext.offset_y_rel * img_h)
+                        roi = {
+                            "x1": int(cx1), "y1": int(cy1),
+                            "x2": int(cx1 + ext.width_rel * img_w),
+                            "y2": int(cy1 + ext.height_rel * img_h),
+                        }
+                    crop = estrai_crop(img, roi, padding=10)
+                    if crop is not None:
+                        return crop, "MODO_A"
+                    log.warning(f"  Campo '{campo.nome_campo}': match trovato ma ROI fuori dai limiti dell'immagine")
+
+        if campo.rettangolo_fallback is not None:
+            px1, py1, px2, py2 = campo.rettangolo_fallback.to_pixel(img.width, img.height)
+            log.warning(f"  Campo '{campo.nome_campo}': parola-guida non trovata (o non configurata), uso ripiego Modo B")
+            crop = estrai_crop(img, {"x1": px1, "y1": py1, "x2": px2, "y2": py2}, padding=5)
+            if crop is not None:
+                return crop, "MODO_B_RIPIEGO"
+
+        return None, "FALLITO"
+
+    def _predici_campo_da_crop(self, crop: Image.Image, nome_campo: str, parola_guida: Optional[str]) -> str:
+        """Legge il valore di un campo profilato dal suo crop dedicato —
+        stesso pattern di _predici_data_preparazione_da_crop, generalizzato
+        a qualunque campo tramite PROMPT_CROP_CAMPO_PROFILATO (prompt
+        generico, non calibrato per campo — vedi nota nel prompt stesso).
+
+        Se nome_campo corrisponde a un campo già esistente e già calibrato
+        nella pipeline reale (PROMPT_CROP_CALIBRATI_PER_CAMPO), usa QUEL
+        prompt invece del generico — non buttare via una calibrazione già
+        verificata su casi reali solo perché la lettura passa dal nuovo
+        meccanismo a profilo."""
+        if not self.usa_qwen_su_crop:
+            return ""
+        try:
+            buf = io.BytesIO()
+            crop.convert("RGB").save(buf, format="PNG")
+            img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+            prompt_calibrato = PROMPT_CROP_CALIBRATI_PER_CAMPO.get(nome_campo)
+            if prompt_calibrato is not None:
+                prompt = prompt_calibrato
+            else:
+                prompt = PROMPT_CROP_CAMPO_PROFILATO.format(
+                    nome_campo=nome_campo, parola_guida=parola_guida or "(area definita dall'operatore)"
+                )
+            response = ollama.chat(
+                model=self.qwen_model,
+                messages=[{
+                    "role": "user",
+                    "content": prompt + _suffisso_no_think(self.qwen_model),
+                    "images": [img_b64]
+                }],
+                think=False,
+                options={"temperature": 0.0}
+            )
+            testo = _contenuto_pulito(response)
+            log.info(f"    [{nome_campo}] risposta grezza crop profilato: {testo!r}")
+            testo_pulito = testo.strip("*_`").strip()
+            if not testo_pulito or testo_pulito.upper() == "INCERTO":
+                return ""
+            return testo_pulito
+        except Exception as e:
+            log.warning(f"Errore lettura crop profilato per '{nome_campo}': {e}")
+            return ""
+
+    def correggi_campi_profilati(self, dati: dict, pdf_path: Path, nome_farmacia_da_regione: str = "") -> dict:
+        """
+        Punti 2-3 della pipeline per le farmacie con un profilo di layout
+        strutturato (vedi profilo_layout_etichetta.py): per ogni campo
+        configurato, localizza (Modo A/B) e legge il valore con un crop e
+        una chiamata IA dedicati — stesso principio già in produzione per
+        data_etichetta_preparazione (correggi_data_preparazione_dinamico).
+        Il valore letto ha PRIORITÀ e sovrascrive quello del passaggio
+        whole-label (correggi_etichetta_per_farmacia, invariato, usato
+        come base per i campi non coperti dal profilo).
+
+        L'area in cui cercare i campi è quella disegnata dall'operatore
+        per la farmacia (profilo.rettangolo_etichetta) — NON il risultato
+        del confronto SSIM del Punto 1, volutamente: è proprio
+        l'affidabilità di quel confronto sui moduli prestampati diversi il
+        problema che il profilo risolve. Se l'operatore non ha ancora
+        disegnato l'area generale, si ricade sulla fascia inferiore
+        generica della pagina (45%-100%), come per "Prep." oggi.
+
+        Se la farmacia non ha un profilo strutturato, o il profilo non ha
+        campi configurati, non fa nulla — comportamento invariato.
+        """
+        nome_farmacia_ocr = str(dati.get("nome_farmacia", "")).strip()
+        nome_farmacia = nome_farmacia_ocr or nome_farmacia_da_regione.strip()
+
+        profilo = ottieni_profilo_farmacia(nome_farmacia)
+        if profilo is None or not profilo.campi:
+            return dati
+
+        try:
+            img = self._pdf_to_image(pdf_path)
+        except Exception as e:
+            log.error(f"Errore apertura PDF per correggi_campi_profilati {pdf_path}: {e}")
+            return dati
+
+        reader = self._get_easyocr_reader()
+        if reader is None:
+            log.warning("  correggi_campi_profilati: EasyOCR non disponibile, skip")
+            return dati
+
+        if profilo.rettangolo_etichetta is not None:
+            area_ricerca = profilo.rettangolo_etichetta.to_pixel(img.width, img.height)
+            log.info(f"  Farmacia '{nome_farmacia}': uso l'area etichetta definita dall'operatore")
+        else:
+            page_h = img.height
+            area_ricerca = (0, int(page_h * 0.45), img.width, page_h)
+            log.info(f"  Farmacia '{nome_farmacia}': nessuna area etichetta definita dall'operatore, ricado sulla fascia inferiore generica")
+
+        for campo in profilo.campi:
+            crop, metodo = self._localizza_campo_profilato_e_crop(img, reader, campo, area_ricerca)
+            if crop is None:
+                log.info(f"  Campo '{campo.nome_campo}': non localizzato (Modo A e Modo B falliti), resta invariato")
+                continue
+
+            valore = self._predici_campo_da_crop(crop, campo.nome_campo, campo.parola_guida)
+            if valore:
+                dati[campo.nome_campo] = valore
+                dati[f"{campo.nome_campo}_risolto_da_profilo"] = True
+                if metodo == "MODO_B_RIPIEGO":
+                    # segnalazione per la revisione operatore, come richiesto
+                    # dal documento di fattibilità sezione 3.3
+                    dati[f"{campo.nome_campo}_letto_con_ripiego"] = True
+                log.info(f"  Campo '{campo.nome_campo}' recuperato da profilo ({metodo}): {valore}")
+            else:
+                log.info(f"  Campo '{campo.nome_campo}': crop trovato ({metodo}) ma nessun valore plausibile, resta invariato")
 
         return dati
 
