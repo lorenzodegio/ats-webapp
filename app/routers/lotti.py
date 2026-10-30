@@ -29,6 +29,7 @@ from app.models import (
 )
 from app.storage import (
     MEDIA_ROOT,
+    ErroreStorageNonValido,
     nome_cartella_farmacia,
     nome_file_sicuro,
     percorso_pdf_prescrizione as _percorso_pdf_prescrizione,
@@ -475,7 +476,24 @@ def correggi_barcode(
     nuovo_barcode_pulito = nuovo_barcode.strip()
 
     if era_undefined:
-        correggi_barcode_reale(presc.id, nuovo_barcode_pulito)
+        try:
+            correggi_barcode_reale(presc.id, nuovo_barcode_pulito)
+        except (OSError, ErroreStorageNonValido) as exc:
+            # Scrittura sullo storage permanente fallita (disco, permessi,
+            # percorso non valido): niente commit del barcode "corretto" nel
+            # DB con il file ancora sotto il nome segnaposto nella cartella
+            # che la farmacia vede davvero — segnala il lotto in eccezione
+            # (stesso stato/vista usati per i fallimenti delle fasi
+            # automatiche, vedi app/real_pipeline.py) invece di un 500 muto.
+            lotto = db.query(LottoMensile).filter(LottoMensile.id == uuid.UUID(lotto_id)).first()
+            if lotto:
+                lotto.stato = StatoLotto.eccezione
+                lotto.note = (
+                    (lotto.note or "")
+                    + f"\n[{datetime.utcnow():%d/%m %H:%M}] Correzione barcode: {exc}"
+                ).strip()
+                db.commit()
+            return RedirectResponse(url=f"/lotti/{lotto_id}", status_code=302)
         db.refresh(presc)
     else:
         presc.barcode = nuovo_barcode_pulito

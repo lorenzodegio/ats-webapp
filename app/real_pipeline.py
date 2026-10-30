@@ -896,6 +896,12 @@ def correggi_barcode_reale(prescrizione_id, nuovo_barcode: str) -> None:
     _pubblica_prescrizioni_su_sharepoint) — altrimenti chi apre quella
     cartella continuerebbe a trovare il nome segnaposto invece del
     barcode vero.
+
+    Un errore qui (storage non valido, permessi, disco) PROPAGA: niente
+    OSError silenziosa che lascerebbe il barcode "corretto" nel DB con il
+    file ancora sotto il nome segnaposto nella cartella che la farmacia
+    vede davvero — il chiamante (route correggi_barcode) decide cosa
+    mostrare all'operatore.
     """
     db: Session = SessionLocal()
     try:
@@ -927,14 +933,11 @@ def correggi_barcode_reale(prescrizione_id, nuovo_barcode: str) -> None:
                 cartella_prescrizioni = radice_sharepoint() / lotto.sp_prescrizioni_path
                 vecchio_su_sp = cartella_prescrizioni / f"{vecchio_stem}.pdf"
                 nuovo_su_sp = cartella_prescrizioni / f"{nuovo_barcode}.pdf"
-                try:
-                    if vecchio_su_sp.is_file():
-                        shutil.move(str(vecchio_su_sp), str(nuovo_su_sp))
-                    elif destinazione.exists() and not nuovo_su_sp.exists():
-                        cartella_prescrizioni.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(destinazione, nuovo_su_sp)
-                except OSError:
-                    log.exception("Impossibile aggiornare la copia su SharePoint dopo la correzione barcode")
+                if vecchio_su_sp.is_file():
+                    shutil.move(str(vecchio_su_sp), str(nuovo_su_sp))
+                elif destinazione.exists() and not nuovo_su_sp.exists():
+                    cartella_prescrizioni.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(destinazione, nuovo_su_sp)
 
         presc.barcode = nuovo_barcode
         presc.stato_barcode = StatoBarcode.corretto_manuale
