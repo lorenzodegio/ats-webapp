@@ -16,8 +16,9 @@ Uso:
 IMPORTANTE: usa solo PDF anonimizzati/di prova, mai ricette reali con dati
 di pazienti — questo script non elabora/scrive nulla di diverso dalla
 pipeline normale, ma e' pensato per essere lanciato ripetutamente e i suoi
-output (benchmark_output\\, CSV dei risultati) restano sul disco per essere
-confrontati a mano.
+output (benchmark_output\\, CSV e report Markdown dei risultati) restano sul
+disco per essere confrontati a mano. Nessun output stampa mai il contenuto
+dei documenti: solo conteggi, tempi e picchi di RAM.
 
 Scope: misura SOLO la fase di estrazione OCR (pipeline.esegui_estrazione —
 il grosso del tempo e del traffico verso Ollama). Il controllo thread della
@@ -110,6 +111,54 @@ def esegui_combinazione(ricette_dir: Path, output_dir: Path, num_thread: int, pa
     }
 
 
+def scrivi_report_markdown(righe: list, percorso: Path, n_pdf: int) -> None:
+    """Report leggibile (per chi calibra il server, non necessariamente da
+    riga di comando) — stesse righe del CSV, formattate come tabella, piu'
+    un paragrafo di raccomandazione. Non contiene mai testo delle ricette:
+    solo conteggi/tempi/RAM, le stesse colonne del CSV."""
+    righe_valide = [r for r in righe if r["elaborati"] > 0]
+    migliore = min(righe_valide, key=lambda r: r["durata_totale_sec"], default=None)
+
+    testo = [
+        "# Risultati benchmark pipeline OCR",
+        "",
+        f"PDF di test: {n_pdf}. Fase misurata: estrazione OCR "
+        f"(`pipeline.esegui_estrazione`) — la fase che chiama Ollama, unica "
+        f"influenzata da num_thread/parallelismo.",
+        "",
+        "| num_thread | parallelismo | durata totale (s) | media per ricetta (s) | elaborati/totale | errori | picco RAM (MB) |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for r in righe:
+        testo.append(
+            f"| {r['num_thread']} | {r['parallelismo']} | {r['durata_totale_sec']} | "
+            f"{r['media_sec_per_ricetta']} | {r['elaborati']}/{r['totale_ricette']} | "
+            f"{r['errori']} | {r['picco_ram_mb']} |"
+        )
+    testo.append("")
+
+    if migliore:
+        testo.append(
+            f"**Combinazione piu' veloce**: num_thread={migliore['num_thread']}, "
+            f"parallelismo={migliore['parallelismo']} "
+            f"({migliore['durata_totale_sec']}s totali, "
+            f"{migliore['media_sec_per_ricetta']}s/ricetta, "
+            f"{migliore['picco_ram_mb']} MB di picco RAM)."
+        )
+        testo.append("")
+        testo.append(
+            "Da riportare in `.env` come `OLLAMA_NUM_THREAD_PESANTE`/"
+            "`OLLAMA_NUM_THREAD_LEGGERO` e `PIPELINE_PARALLELISMO` — valuta "
+            "anche il picco di RAM rispetto alla memoria disponibile sul "
+            "server prima di scegliere la combinazione definitiva."
+        )
+    else:
+        testo.append("Nessuna combinazione ha elaborato ricette con successo — controlla i log dell'esecuzione.")
+    testo.append("")
+
+    percorso.write_text("\n".join(testo), encoding="utf-8")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ricette", type=Path, required=True,
@@ -124,6 +173,8 @@ def main():
                      help="Valori di parallelismo da confrontare, separati da virgola (default: 1,2)")
     ap.add_argument("--risultati", type=Path, default=None,
                      help="File CSV di output (default: benchmark_risultati_<timestamp>.csv)")
+    ap.add_argument("--report", type=Path, default=None,
+                     help="File Markdown di output (default: benchmark_report_<timestamp>.md)")
     args = ap.parse_args()
 
     if not args.ricette.is_dir() or not list(args.ricette.glob("*.pdf")):
@@ -131,7 +182,9 @@ def main():
 
     valori_thread = [int(v.strip()) for v in args.thread.split(",") if v.strip()]
     valori_parallelismo = [int(v.strip()) for v in args.parallelismo.split(",") if v.strip()]
-    risultati_path = args.risultati or Path(f"benchmark_risultati_{datetime.now():%Y%m%d_%H%M%S}.csv")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    risultati_path = args.risultati or Path(f"benchmark_risultati_{timestamp}.csv")
+    report_path = args.report or Path(f"benchmark_report_{timestamp}.md")
 
     n_pdf = len(list(args.ricette.glob("*.pdf")))
     print(f"Benchmark su {n_pdf} PDF — {len(valori_thread)} valori di thread x {len(valori_parallelismo)} di parallelismo "
@@ -151,6 +204,9 @@ def main():
         writer.writeheader()
         writer.writerows(righe)
     print(f"Risultati salvati in {risultati_path}")
+
+    scrivi_report_markdown(righe, report_path, n_pdf)
+    print(f"Report salvato in {report_path}")
 
     migliore = min((r for r in righe if r["elaborati"] > 0), key=lambda r: r["durata_totale_sec"], default=None)
     if migliore:
