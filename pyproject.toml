@@ -26,3 +26,11 @@ dependencies = [
 # Docker del server, macchina GPU) — questo pyproject.toml/uv.lock e'
 # l'installazione nativa (Windows Server, install.ps1/update.ps1). Stessi
 # pacchetti/versioni: se aggiorni uno, aggiorna anche l'altro.
+
+[dependency-groups]
+# Solo per "uv sync --group test" in sviluppo — mai installati in
+# produzione (install.ps1 usa "uv sync" semplice, senza gruppi).
+test = [
+    "pytest>=8.0.0",
+    "httpx>=0.27.0",
+]
