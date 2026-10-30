@@ -5,15 +5,27 @@
     da solo.
 
 .DESCRIPTION
-    Layout assunto sul server (vedi DEPLOY_WINDOWS.md per i dettagli):
-      E:\infra\ollama               servizio Ollama standalone (dati/modelli)
-      E:\infra\winsw                WinSW.exe + XML dei servizi generati
-      E:\apps\ocr-cannabis           questo repository (checkout git)
-      E:\apps\ocr-cannabis\docker\.venv   ambiente Python della pipeline (uv)
-      E:\apps\ocr-cannabis\.venv          ambiente Python della webapp (uv)
+    Layout assunto sul server, gia' predisposto da uno script di setup
+    (vedi DEPLOY_WINDOWS.md per i dettagli, NON gestito da questi script):
+      E:\infra\tools\uv             uv (nel PATH)
+      E:\infra\tools\winsw          WinSW-x64.exe + XML dei servizi generati
+      E:\infra\python               Python gestito da uv (UV_PYTHON_INSTALL_DIR)
+      E:\infra\cache\uv             cache di uv (UV_CACHE_DIR)
+      servizio "infra-ollama"       Ollama condiviso, gia' in esecuzione,
+                                     modelli gia' scaricati  -  NON gestito
+                                     da install.ps1, solo una dipendenza
+      servizio "postgresql-x64-16"  PostgreSQL 16, solo localhost, bin nel PATH
+      E:\apps\ocr-cannabis\app        questa repository (checkout git)
+      E:\apps\ocr-cannabis\app\.venv  ambiente Python della webapp (uv)
+      E:\apps\ocr-cannabis\pipeline        repo SEPARATA ocr-cannabis-ats (checkout git)
+      E:\apps\ocr-cannabis\pipeline\.venv  ambiente Python della pipeline (uv)
       E:\apps\ocr-cannabis\data            STORAGE_LOCAL_DIR + modelli EasyOCR
       E:\apps\ocr-cannabis\logs            log della webapp (rotazione)
       E:\apps\ocr-cannabis\backup          dump Postgres + copie di data\
+
+    Nessun utente di servizio dedicato: i servizi girano con l'utenza unica
+    del progetto (account amministratore gia' esistente), la cui password
+    viene chiesta all'installazione  -  non creata/gestita qui.
 
     NON TESTATO su un vero Windows Server  -  scritto leggendo il codice reale
     (app/database.py, app/storage.py, alembic/, pyproject.toml) e la
@@ -24,24 +36,34 @@
 
 $ErrorActionPreference = "Stop"
 
-# -- Layout --------------------------------------------------------------
-$script:RepoRoot   = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$script:InfraRoot  = if ($env:ATS_INFRA_ROOT) { $env:ATS_INFRA_ROOT } else { "E:\infra" }
-$script:OllamaRoot = Join-Path $InfraRoot "ollama"
-$script:WinswRoot  = Join-Path $InfraRoot "winsw"
-$script:DataRoot   = Join-Path $RepoRoot "data"
-$script:LogsRoot   = Join-Path $RepoRoot "logs"
-$script:BackupRoot = Join-Path $RepoRoot "backup"
-$script:PipelineVenv = Join-Path $RepoRoot "docker\.venv"
-$script:WebappVenv   = Join-Path $RepoRoot ".venv"
+# -- Layout ----------------------------------------------------------------
+# RepoRoot = cartella "app" (questa repo) -  PipelineRoot = cartella
+# "pipeline" SIBLING, non dentro RepoRoot (repo ocr-cannabis-ats separata,
+# vedi CLAUDE.md): niente piu' docker\.venv dentro questa repo.
+$script:RepoRoot     = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$script:AppsRoot      = Split-Path $RepoRoot -Parent
+$script:PipelineRoot  = if ($env:ATS_PIPELINE_ROOT) { $env:ATS_PIPELINE_ROOT } else { Join-Path $AppsRoot "pipeline" }
+$script:InfraRoot     = if ($env:ATS_INFRA_ROOT) { $env:ATS_INFRA_ROOT } else { "E:\infra" }
+$script:WinswRoot     = Join-Path $InfraRoot "tools\winsw"
+$script:DataRoot      = Join-Path $AppsRoot "data"
+$script:LogsRoot      = Join-Path $AppsRoot "logs"
+$script:BackupRoot    = Join-Path $AppsRoot "backup"
+$script:PipelineVenv  = Join-Path $PipelineRoot ".venv"
+$script:WebappVenv    = Join-Path $RepoRoot ".venv"
 
-# -- Servizi Windows (WinSW) ---------------------------------------------
-$script:ServicePrefix  = "ATS-"
-$script:ServiceOllama  = "${ServicePrefix}Ollama"
-$script:ServiceWebapp  = "${ServicePrefix}Webapp"
+# -- Servizi Windows (WinSW) -----------------------------------------------
+# "infra-ollama"/"postgresql-x64-16" sono infrastruttura CONDIVISA, gia'
+# installata da altri -  solo nomi di riferimento per le dipendenze, questi
+# script non li registrano/avviano/fermano mai.
+$script:ServicePrefix       = "ocr-cannabis-"
+$script:ServiceWebapp       = "${ServicePrefix}web"
+$script:ServizioOllamaEsterno    = "infra-ollama"
+$script:ServizioPostgresEsterno  = "postgresql-x64-16"
 
-# -- Utente dedicato ------------------------------------------------------
-$script:ServiceAccount = if ($env:ATS_SERVICE_ACCOUNT) { $env:ATS_SERVICE_ACCOUNT } else { "$env:COMPUTERNAME\svc_ocr" }
+# -- Account di servizio ----------------------------------------------------
+# Utenza unica del progetto (account amministratore gia' esistente, non
+# creato qui) -  default: chi esegue questo script; sovrascrivibile.
+$script:ServiceAccount = if ($env:ATS_SERVICE_ACCOUNT) { $env:ATS_SERVICE_ACCOUNT } else { "$env:COMPUTERNAME\$env:USERNAME" }
 
 function Write-Step {
     param([string]$Messaggio)
@@ -82,6 +104,71 @@ function Get-DotEnvValue {
     $valore = $valore.Trim('"').Trim("'")
     if ([string]::IsNullOrEmpty($valore)) { return $Default }
     return $valore
+}
+
+function Set-DotEnvValue {
+    <# Scrive/aggiorna UNA chiave in .env, preservando tutte le altre righe
+       (commenti compresi) -  usata per scrivere la password generata del
+       ruolo Postgres dell'app e SESSION_SECRET_KEY quando assenti, invece
+       di fermarsi e chiedere all'operatore di completarle a mano. Se la
+       chiave esiste gia' (anche commentata con "# CHIAVE=") la riga viene
+       sostituita con una versione non commentata; altrimenti viene
+       aggiunta in fondo al file. #>
+    param([Parameter(Mandatory)][string]$Chiave, [Parameter(Mandatory)][string]$Valore)
+    $percorso = Get-DotEnvPath
+    $righe = Get-Content $percorso
+    $trovata = $false
+    $nuoveRighe = $righe | ForEach-Object {
+        if ($_ -match "^\s*#?\s*$Chiave\s*=") {
+            $trovata = $true
+            "$Chiave=$Valore"
+        } else {
+            $_
+        }
+    }
+    if (-not $trovata) {
+        $nuoveRighe += "$Chiave=$Valore"
+    }
+    # Retry breve: un antivirus/indexer che tiene il file aperto un istante
+    # e' un lock transitorio, non un errore reale -  vedi la stessa
+    # situazione (ben peggiore, un file perso) incontrata scrivendo questi
+    # stessi script con Move-Item invece di un retry in-place come questo.
+    $tentativi = 0
+    while ($true) {
+        try {
+            Set-Content -Path $percorso -Value $nuoveRighe -Encoding UTF8 -ErrorAction Stop
+            break
+        } catch {
+            $tentativi++
+            if ($tentativi -ge 5) { throw }
+            Start-Sleep -Milliseconds 300
+        }
+    }
+}
+
+function New-PasswordCasuale {
+    <# Password casuale per il ruolo Postgres dell'app (non per account
+       Windows/admin, quelle restano sempre chieste all'operatore) -  solo
+       caratteri alfanumerici, cosi' non serve preoccuparsi di escaping in
+       stringhe di connessione o comandi psql. #>
+    param([int]$Lunghezza = 32)
+    $alfabeto = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    $bytes = New-Object byte[] $Lunghezza
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    -join ($bytes | ForEach-Object { $alfabeto[$_ % $alfabeto.Length] })
+}
+
+function ConvertFrom-SecureStringPlain {
+    <# Decodifica una SecureString (da Read-Host -AsSecureString) nel testo
+       in chiaro SOLO per il tempo necessario a usarla (PGPASSWORD, sc.exe
+       config, ecc.) -  mai scritta su disco da questa funzione. #>
+    param([Parameter(Mandatory)][System.Security.SecureString]$Sicura)
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Sicura)
+    try {
+        return [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+    } finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    }
 }
 
 function Get-ConnessionePostgres {

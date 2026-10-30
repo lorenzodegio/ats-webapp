@@ -1,118 +1,140 @@
 # Produzione su Windows Server (senza Docker/WSL2, senza GPU)
 
-Guida operativa per installare e gestire l'app su un server Windows Server
-2022 (VM, CPU-only — nessuna GPU), dove Docker/WSL2 non sono disponibili.
-La macchina ATS con GPU continua a funzionare normalmente con Docker: le
-due modalità convivono (`PIPELINE_RUNNER`, vedi sotto), nessuna delle due
-esclude l'altra.
+Guida operativa per installare e gestire l'app sul server Windows Server
+2022 `ATSVaUninsubria.aslva.it` (VM VMware, 40 vCPU Xeon Gold 6140 con
+AVX-512, 192 GB RAM, nessuna GPU, PowerShell 5.1), dove Docker/WSL2 non
+sono disponibili. La macchina ATS con GPU continua a funzionare normalmente
+con Docker: le due modalità convivono (`PIPELINE_RUNNER`, vedi sotto),
+nessuna delle due esclude l'altra.
 
 **Stato**: scritto e verificato dove possibile (sintassi degli script,
 test funzionali mirati dei singoli meccanismi — vedi i commit sul branch
 `deploy/windows-server`), ma **mai eseguito su un vero Windows Server**.
 Il primo giro reale va fatto con attenzione, passo per passo, non "a
 occhi chiusi" — segnala qualunque scostamento da quanto descritto qui.
+L'installazione la esegue una persona in PowerShell come amministratore;
+può essere assistita da Claude Code, che però non può rispondere a prompt
+interattivi (`Read-Host`) — le password vanno sempre inserite di persona.
 
 ## Indice
-1. [Prerequisiti](#1-prerequisiti)
+1. [Prerequisiti (già predisposti sul server)](#1-prerequisiti-già-predisposti-sul-server)
 2. [Layout delle cartelle](#2-layout-delle-cartelle)
 3. [Installazione](#3-installazione)
-4. [Configurazione IIS e certificato](#4-configurazione-iis-e-certificato-manuale)
+4. [Configurazione IIS e certificato](#4-configurazione-iis-e-certificato-già-fatta)
 5. [Verifica](#5-verifica)
-6. [Aggiornamento](#6-aggiornamento)
-7. [Backup e ripristino](#7-backup-e-ripristino)
-8. [Rollback](#8-rollback)
-9. [Dopo un riavvio del server](#9-dopo-un-riavvio-del-server)
-10. [Risoluzione problemi rapida](#10-risoluzione-problemi-rapida)
+6. [Benchmark (calibrazione CPU)](#6-benchmark-calibrazione-cpu)
+7. [Aggiornamento](#7-aggiornamento)
+8. [Backup e ripristino](#8-backup-e-ripristino)
+9. [Rollback](#9-rollback)
+10. [Disinstallazione](#10-disinstallazione)
+11. [Dopo un riavvio del server](#11-dopo-un-riavvio-del-server)
+12. [Risoluzione problemi rapida](#12-risoluzione-problemi-rapida)
 
 ---
 
-## 1. Prerequisiti
+## 1. Prerequisiti (già predisposti sul server)
 
-Installati **a mano** prima di eseguire qualunque script (nessuno di questi
-è automatizzato da `install.ps1`):
+Il server è già stato preparato da uno script di setup — **nessuno di
+questi va reinstallato o riconfigurato da `install.ps1`**, che si limita a
+verificarne la presenza (vedi `-1. Prerequisiti-` in `install.ps1`):
 
-- Git
-- Python 3.11 (per tutti gli utenti)
-- [uv](https://docs.astral.sh/uv/) (gestione dipendenze/ambienti Python)
-- Visual C++ Redistributable 2013 e 2015-2022
-- **Tesseract-OCR**, installato in `C:\Program Files\Tesseract-OCR` — **non
-  era nella lista originale dei prerequisiti**: serve davvero, è usato come
-  fallback quando un barcode non viene letto (`front_detector.py`, chiamato
-  da `phase1_preprocess.py`). Scaricalo dall'installer Windows ufficiale
-  (UB-Mannheim) e verifica che `tesseract.exe` finisca in quel percorso o
+- Git, Python 3.11 gestito da **uv** (`UV_PYTHON_INSTALL_DIR=E:\infra\python`,
+  `UV_CACHE_DIR=E:\infra\cache\uv`), `uv` in `E:\infra\tools\uv` (nel PATH).
+  Nessun Python di sistema installato a parte.
+- Visual C++ Redistributable 2013 e 2015-2022.
+- **Tesseract-OCR** in `C:\Program Files\Tesseract-OCR` (nel PATH), con
+  lingua `ita` — usato come fallback quando un barcode non viene letto
+  (`front_detector.py`, chiamato da `phase1_preprocess.py`).
+- **PostgreSQL 16**, servizio `postgresql-x64-16`, in ascolto solo su
+  `localhost:5432`, strumenti a riga di comando (`psql`, `pg_dump`, ecc.)
   nel PATH.
-- PostgreSQL 16, come servizio Windows, in ascolto solo su `localhost`
-- Ollama standalone (eseguibile, non ancora registrato come servizio
-  Windows — ci pensa `install.ps1`, vedi sotto)
-- IIS con il modulo reverse proxy (Application Request Routing + URL
-  Rewrite) — configurazione manuale, vedi [sezione 4](#4-configurazione-iis-e-certificato-manuale)
-- Un utente locale dedicato per i servizi (qui chiamato `svc_ocr`), con il
-  diritto **"Log on as a service"** già concesso (Criteri di sicurezza
-  locali → Criteri locali → Assegnazione dei diritti utente → "Accesso
-  come servizio"). `install.ps1` non lo concede da solo.
-- Accesso amministratore locale sulla macchina
+- **Ollama condiviso**, servizio `infra-ollama`, su `127.0.0.1:11434`, con
+  `OLLAMA_KEEP_ALIVE=-1`, `OLLAMA_MAX_LOADED_MODELS=2`,
+  `OLLAMA_NUM_PARALLEL=1`. Modelli **già scaricati**:
+  `qwen3-vl:30b-a3b-instruct` e `qwen3-vl:8b-instruct`.
+- `WinSW-x64.exe` in `E:\infra\tools\winsw\`.
+- IIS già configurato come reverse proxy HTTPS — vedi
+  [sezione 4](#4-configurazione-iis-e-certificato-già-fatta).
+- **Nessun utente di servizio dedicato**: i servizi girano con l'utenza
+  unica del progetto (l'account amministratore della macchina), la cui
+  password viene chiesta a più riprese durante `install.ps1` (sempre con
+  `Read-Host -AsSecureString`, mai salvata in chiaro da questi script).
 
-Verifica rapida di tutto quanto sopra (tranne IIS/IIS cert, cosa a parte):
+Verifica rapida (quello che `install.ps1` controlla comunque da solo al
+primo passo):
 
 ```powershell
-git --version; python --version; uv --version
-Test-Path "C:\Program Files\Tesseract-OCR\tesseract.exe"
-Get-Service postgresql* | Select Name, Status
-ollama --version
+git --version; uv --version; tesseract --version
+tesseract --list-langs                        # deve contenere "ita"
+Get-Service postgresql-x64-16, infra-ollama | Select Name, Status
+ollama list                                    # deve contenere i due modelli qwen3-vl
 ```
 
 ## 2. Layout delle cartelle
 
 ```
-E:\infra\
-  ollama\                  dati/modelli del servizio Ollama (OLLAMA_MODELS)
-  winsw\                   WinSW.exe + XML dei servizi generati da install.ps1
+E:\infra\                        (già predisposto, non toccato da questi script)
+  tools\uv\                      uv
+  tools\winsw\WinSW-x64.exe
+  python\                        Python gestito da uv (UV_PYTHON_INSTALL_DIR)
+  cache\uv\                      cache di uv (UV_CACHE_DIR)
 
-E:\apps\ocr-cannabis\      checkout git di questo repository
-  .venv\                   ambiente Python della WEBAPP (uv sync, radice)
-  docker\.venv\            ambiente Python della PIPELINE (uv sync, docker\ — separato)
+E:\apps\ocr-cannabis\
+  app\                           checkout git di QUESTA repository (ats-webapp)
+    .venv\                       ambiente Python della WEBAPP (uv sync)
+    deploy\windows\               gli script di questa guida
+    .env                          configurazione (da .env.example, MAI committato)
+  pipeline\                      checkout git della repo SEPARATA ocr-cannabis-ats
+    .venv\                       ambiente Python della PIPELINE (uv sync, separato)
   data\
-    storage\                STORAGE_LOCAL_DIR (file permanenti: PDF/PNG/Excel/JSON)
-    models\easyocr\         modelli EasyOCR pre-scaricati (EASYOCR_MODEL_DIR)
-  logs\                     log della webapp a rotazione (LOG_DIR) + log WinSW
-  backup\                   dump Postgres + copie di data\ (backup.ps1)
-  deploy\windows\           gli script di questa guida
-  .env                      configurazione (da .env.example, MAI committato)
+    storage\                      STORAGE_LOCAL_DIR (file permanenti: PDF/PNG/Excel/JSON)
+    models\easyocr\               modelli EasyOCR pre-scaricati (EASYOCR_MODEL_DIR)
+  logs\                          log della webapp a rotazione (LOG_DIR) + log WinSW
+  backup\                        dump Postgres + copie di data\ (backup.ps1)
 ```
 
-`WinSW.exe` **non è scaricato automaticamente** da `install.ps1` — prendilo
-da <https://github.com/winsw/winsw/releases> (una release `WinSW-x64.exe`,
-rinominata `WinSW.exe`) e mettilo in `E:\infra\winsw\` prima di lanciare
-`install.ps1`.
+`app` e `pipeline` sono **due repository git separate** clonate l'una a
+fianco dell'altra, non una dentro l'altra — `PIPELINE_DIR` nel `.env` punta
+a `pipeline\`, non a una sottocartella di `app\`. Se la repo pipeline non
+è ancora clonata lì, `install.ps1` si ferma con un errore chiaro al primo
+passo.
 
 ## 3. Installazione
 
 ```powershell
-cd E:\apps
-git clone <url-del-repo> ocr-cannabis
-cd ocr-cannabis
+cd E:\apps\ocr-cannabis
+git clone <url-ats-webapp> app
+git clone <url-ocr-cannabis-ats> pipeline
+cd app
 git checkout deploy/windows-server   # o il branch/tag di produzione scelto
 
 # Prima esecuzione: crea .env da .env.example e si ferma qui apposta
 .\deploy\windows\install.ps1
 ```
 
-A questo punto **apri `E:\apps\ocr-cannabis\.env` e compilalo**, almeno:
+A questo punto **apri `E:\apps\ocr-cannabis\app\.env` e compilalo**,
+almeno:
 
 | Variabile | Valore |
 |---|---|
 | `APP_ENV` | `production` |
-| `POSTGRES_PASSWORD` | password del ruolo che verrà creato |
-| `SESSION_SECRET_KEY` | `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `POSTGRES_DB` | `ocr_cannabis` |
+| `POSTGRES_USER` | `ocr_cannabis` |
+| `POSTGRES_PASSWORD` | lascia vuota — `install.ps1` ne genera una casuale e la scrive qui da solo |
+| `SESSION_SECRET_KEY` | lascia vuota — `install.ps1` ne genera una da solo se assente |
 | `PIPELINE_RUNNER` | `local` |
-| `PIPELINE_PYTHON` | `E:\apps\ocr-cannabis\docker\.venv\Scripts\python.exe` |
-| `PIPELINE_DIR` | `E:\apps\ocr-cannabis` |
+| `PIPELINE_PYTHON` | `E:\apps\ocr-cannabis\pipeline\.venv\Scripts\python.exe` |
+| `PIPELINE_DIR` | `E:\apps\ocr-cannabis\pipeline` |
 | `STORAGE_BACKEND` | `local` |
 | `STORAGE_LOCAL_DIR` | `E:\apps\ocr-cannabis\data\storage` |
 | `EASYOCR_MODEL_DIR` | `E:\apps\ocr-cannabis\data\models\easyocr` |
 | `LOG_DIR` | `E:\apps\ocr-cannabis\logs` |
 | `APP_PORT` | `8000` (default, da cambiare solo se quella porta è già in uso) |
-| `ROOT_PATH` | vuota se il sito IIS serve l'app alla radice, altrimenti il prefisso (es. `/cannabis`) — vedi sezione 4 |
+| `ROOT_PATH` | `/cannabis` se IIS serve l'app sotto quel percorso (vedi sezione 4), vuota se alla radice |
+
+**Quali sono segrete**: `POSTGRES_PASSWORD` e `SESSION_SECRET_KEY` (generate
+automaticamente, non vanno mai committate né condivise — il `.env` resta
+fuori da git). Le altre sono configurazione, non segreti.
 
 Poi rilancia (idempotente, salta quanto già fatto):
 
@@ -120,69 +142,50 @@ Poi rilancia (idempotente, salta quanto già fatto):
 .\deploy\windows\install.ps1
 ```
 
-Questo secondo giro: sincronizza gli ambienti `uv` (webapp + pipeline,
-separati), scarica i modelli Ollama (`qwen3-vl:30b-a3b-instruct`,
-`qwen3-vl:8b-instruct`) e i modelli EasyOCR, crea database/utente Postgres
-(encoding UTF8 da `template0`), applica le migrazioni Alembic, chiede la
-password del primo admin (richiesta in modo sicuro, non salvata in
-chiaro), registra i servizi Windows (WinSW) e l'attività pianificata di
-backup giornaliero.
-
-Al termine, imposta **a mano** l'account di esecuzione dei due servizi
-(`ATS-Ollama`, `ATS-Webapp`) su `svc_ocr`:
-
-```powershell
-# da services.msc: scheda "Accesso" di ciascun servizio, oppure:
-sc.exe config ATS-Ollama obj= ".\svc_ocr" password= "<password>"
-sc.exe config ATS-Webapp obj= ".\svc_ocr" password= "<password>"
-```
-
-Poi avvia e verifica:
-
-```powershell
-Start-Service ATS-Ollama
-Start-Service ATS-Webapp
-.\deploy\windows\status.ps1
-```
+Questo giro, nell'ordine: verifica i prerequisiti → `uv sync` su webapp e
+pipeline (ambienti separati) → smoke test dell'ambiente pipeline (import,
+lettura di un barcode di prova, Tesseract `ita`) → crea ruolo/database
+Postgres (chiede la password del superuser `postgres`, genera e scrive in
+`.env` una password casuale per il ruolo dell'app) → genera
+`SESSION_SECRET_KEY` se assente → applica le migrazioni Alembic → crea il
+primo utente admin (chiede la password, **di persona**, non tramite
+Claude Code) → scarica i modelli EasyOCR → registra il servizio Windows
+`ocr-cannabis-web` (WinSW, chiede la password dell'account di servizio) →
+crea l'attività pianificata di backup giornaliero (chiede di nuovo la
+password dello stesso account, necessaria per salvarla nell'attività) →
+avvia il servizio e verifica `/health`.
 
 Opzioni utili di `install.ps1`:
-- `-SaltaModelli` — rilancia senza riscaricare GB di modelli già presenti
-- `-SaltaServizi` — prepara tutto ma non registra i servizi Windows, per
-  un primo giro di verifica manuale (`& .venv\Scripts\python.exe -m uvicorn
-  app.main:app` a mano, in primo piano, per vedere subito eventuali errori)
+- `-SaltaServizi` — prepara tutto (ambienti, DB, migrazioni, admin) ma non
+  registra il servizio Windows, per un primo giro di verifica manuale
+  (avvio di uvicorn a mano, in primo piano, per vedere subito eventuali
+  errori — il comando esatto viene stampato a schermo).
 
-## 4. Configurazione IIS e certificato (manuale)
+## 4. Configurazione IIS e certificato (già fatta)
 
-**Non scriptata apposta** — questi script non toccano IIS, certificati o
-firewall. Passi (una tantum):
+**Già configurata sul server** (nessuno di questi passi è automatizzato da
+questi script, e non serve ripeterli): sito IIS con Application Request
+Routing + URL Rewrite come reverse proxy HTTPS verso
+`http://127.0.0.1:8000/`, prefisso `/cannabis/` **tolto** prima di passare
+la richiesta a uvicorn, header `X-Forwarded-Proto: https` e
+`X-Forwarded-Prefix: /cannabis` impostati, upload fino a 500 MB, timeout
+10 minuti.
 
-1. Installa il modulo **Application Request Routing (ARR)** e **URL
-   Rewrite** per IIS, se non già presenti.
-2. In IIS Manager, abilita il proxy ARR (Server → Application Request
-   Routing Cache → Server Proxy Settings → "Enable proxy").
-3. Crea (o usa) un sito IIS con binding HTTPS sul certificato del server.
-4. Aggiungi una regola di URL Rewrite di tipo "Reverse Proxy" verso
-   `http://localhost:8000` (la webapp ascolta solo su `127.0.0.1:8000`,
-   mai esposta direttamente).
-5. Se il sito IIS serve l'app sotto un percorso diverso dalla radice (es.
-   `https://server/cannabis/` invece di `https://server/`, col prefisso
-   TOLTO da IIS prima di passare la richiesta a uvicorn), imposta
-   `ROOT_PATH` nel `.env` (es. `ROOT_PATH=/cannabis`) e rilancia
-   `install.ps1` (o `update.ps1`) per rigenerare il comando del servizio
-   con `--root-path /cannabis`. Oltre al flag passato a uvicorn, l'app
-   stessa usa la stessa variabile per anteporre il prefisso a redirect,
-   link nei template e chiamate `fetch()` in JS (nessuna di queste route
-   usa `url_for`, quindi il meccanismo nativo di Starlette da solo non
-   basterebbe — vedi `app/root_path.py`): imposta lo stesso valore su
-   entrambi i lati (IIS e `.env`), altrimenti i link generati dall'app
-   non corrisponderanno al percorso esterno reale.
-6. Apri la porta 443 (o quella usata) sul firewall di Windows, se non già
-   aperta.
+Perché i link generati dall'app corrispondano davvero al percorso esterno
+`https://.../cannabis/...`, imposta `ROOT_PATH=/cannabis` nel `.env` (vedi
+sezione 3) — oltre al flag `--root-path` passato a uvicorn (gestito da
+`install.ps1`/`update.ps1`), l'app stessa usa la stessa variabile per
+anteporre il prefisso a redirect, link nei template e chiamate `fetch()`
+in JS: nessuna di queste route usa `url_for()`, quindi il meccanismo nativo
+di Starlette legato a `--root-path` da solo non basterebbe (vedi
+`app/root_path.py`). Il valore deve essere **identico** su entrambi i lati
+(IIS e `.env`) — se in futuro cambia il percorso lato IIS, aggiorna anche
+il `.env` e rilancia `update.ps1`.
 
 La webapp si fida degli header `X-Forwarded-*` **solo da 127.0.0.1**
 (`--forwarded-allow-ips=127.0.0.1`, impostato nel comando del servizio
-`ATS-Webapp`) — se IIS non gira sulla stessa macchina, questo valore va
-adattato.
+`ocr-cannabis-web`) — se IIS girasse su un'altra macchina, questo valore
+andrebbe adattato nello script.
 
 ## 5. Verifica
 
@@ -190,30 +193,56 @@ adattato.
 .\deploy\windows\status.ps1
 ```
 
-Controlla: stato dei 3 servizi (Ollama, Webapp, Postgres), risposta di
-`/health`, spazio libero su `E:`, eventuali errori nelle ultime 24 ore nel
-log della webapp, età dell'ultimo backup.
+Controlla: stato del servizio `ocr-cannabis-web`, stato dell'infrastruttura
+condivisa (`infra-ollama`, `postgresql-x64-16` — solo in lettura, questi
+script non li gestiscono), risposta di `/health` (copre database, Ollama e
+percorso di storage — vedi `app/main.py`), spazio libero su `E:`, eventuali
+errori nelle ultime 24 ore nel log della webapp, età dell'ultimo backup.
 
-Poi da browser, sulla macchina o da un client in rete: apri l'URL HTTPS
-configurato in IIS, fai login con l'utente admin creato durante
-l'installazione, e **carica almeno una ricetta di prova** per verificare
-l'intera pipeline (preprocessing → OCR → difformità → Excel) prima di
-considerare l'installazione pronta per l'uso reale.
+Poi da browser, sulla macchina o da un client in rete: apri
+`https://ATSVaUninsubria.aslva.it/cannabis/` (o il percorso configurato),
+fai login con l'utente admin creato durante l'installazione, e **carica
+almeno una ricetta di prova** per verificare l'intera pipeline
+(preprocessing → OCR → difformità → Excel) prima di considerare
+l'installazione pronta per l'uso reale.
 
-## 6. Aggiornamento
+## 6. Benchmark (calibrazione CPU)
+
+Sui 40 vCPU del server, `num_thread` (per chiamata Ollama) e
+`PIPELINE_PARALLELISMO` (documenti elaborati insieme) vanno calibrati
+prima di passare a ricette reali:
+
+```powershell
+.\deploy\windows\benchmark.ps1 -Ricette "E:\apps\ocr-cannabis\data\pdf_test_anonimizzati"
+```
+
+Usa **solo PDF anonimizzati o di prova**, mai ricette reali. Prova di
+default le combinazioni `num_thread` 20/30/38 × `parallelismo` 1/2 (`
+-Thread`/`-Parallelismo` per cambiarle), misura tempo totale, tempo medio
+per documento e picco di RAM per ciascuna, e produce un CSV + un report
+Markdown sotto `E:\apps\ocr-cannabis\backup\benchmark\` — nessuno dei due
+stampa mai il contenuto dei documenti. Riporta la combinazione migliore in
+`.env` come `OLLAMA_NUM_THREAD_PESANTE`/`OLLAMA_NUM_THREAD_LEGGERO` e
+`PIPELINE_PARALLELISMO`, poi `update.ps1` per applicarla (riavvia il
+servizio, che rilegge il `.env`).
+
+## 7. Aggiornamento
 
 ```powershell
 .\deploy\windows\update.ps1
 ```
 
 `git pull` sul branch corrente (o `-Branch <nome>` per cambiarlo), `uv
-sync` su entrambi gli ambienti, `alembic upgrade head`, riavvio del
-servizio `ATS-Webapp`, verifica finale su `/health`. **Si ferma al primo
-errore**: se le migrazioni falliscono, i servizi non vengono riavviati con
-uno schema a metà strada — risolvi il problema prima di ripetere.
+sync` su entrambi gli ambienti (webapp + pipeline, repo separate),
+`alembic upgrade head`, riavvio del servizio `ocr-cannabis-web`, verifica
+finale su `/health`. **Si ferma al primo errore**: se le migrazioni
+falliscono, il servizio non viene riavviato con uno schema a metà strada —
+risolvi il problema prima di ripetere.
 
 Si rifiuta di partire se ci sono modifiche non committate nel repository
-(evita che `git pull` fallisca a metà in un modo confuso).
+(evita che `git pull` fallisca a metà in un modo confuso). Non tocca la
+repo pipeline (`ocr-cannabis-ats`) oltre a `uv sync` — un suo aggiornamento
+di codice si coordina separatamente con chi la mantiene.
 
 ### Creare una nuova migrazione
 
@@ -248,18 +277,18 @@ head` durante il normale aggiornamento (vedi sopra) — nessun passo
 manuale aggiuntivo, a patto che la migrazione sia stata creata e
 verificata come sopra.
 
-## 7. Backup e ripristino
+## 8. Backup e ripristino
 
-Automatico ogni notte alle 3:00 (attività pianificata creata da
-`install.ps1`), oppure a mano:
+Automatico ogni notte alle 3:00 (attività pianificata `ocr-cannabis-backup`
+creata da `install.ps1`), oppure a mano:
 
 ```powershell
 .\deploy\windows\backup.ps1                    # rotazione default 14 giorni
 .\deploy\windows\backup.ps1 -GiorniRotazione 30
 ```
 
-Produce `pg_dump` (formato custom) + copia di `data\` in
-`E:\apps\ocr-cannabis\backup\<timestamp>\`.
+Produce `pg_dump` (formato custom, solo database `ocr_cannabis`) + copia
+di `data\` in `E:\apps\ocr-cannabis\backup\<timestamp>\`.
 
 Ripristino (**distruttivo**, chiede conferma esplicita):
 
@@ -269,20 +298,22 @@ Ripristino (**distruttivo**, chiede conferma esplicita):
 ```
 
 Verifica periodicamente (non solo alla prima installazione) che l'attività
-pianificata abbia davvero le credenziali di `svc_ocr` salvate — vedi
-l'avviso che `install.ps1` stampa in merito, è un passo che Windows non fa
-automaticamente da riga di comando.
+pianificata abbia davvero una password salvata — se mai dovesse fallire
+silenziosamente, ricreala rilanciando `install.ps1` (è idempotente: la
+attività esistente non viene toccata, cancellala prima a mano con
+`Unregister-ScheduledTask -TaskName ocr-cannabis-backup` se la vuoi
+rigenerare con una password diversa).
 
-## 8. Rollback
+## 9. Rollback
 
 Se un aggiornamento introduce un problema serio:
 
 ```powershell
-cd E:\apps\ocr-cannabis
+cd E:\apps\ocr-cannabis\app
 git log --oneline -10                  # trova il commit/tag buono precedente
 git checkout <commit-o-tag-precedente>
 uv sync
-Push-Location docker; uv sync; Pop-Location
+Push-Location ..\pipeline; uv sync; Pop-Location
 ```
 
 Se la revisione precedente aveva anche uno schema DB diverso (raro, solo
@@ -297,15 +328,28 @@ se il problema è arrivato con una migrazione Alembic):
 indietro nel codice. Poi riavvia il servizio:
 
 ```powershell
-Restart-Service ATS-Webapp
+Restart-Service ocr-cannabis-web
 .\deploy\windows\status.ps1
 ```
 
-## 9. Dopo un riavvio del server
+## 10. Disinstallazione
+
+```powershell
+.\deploy\windows\uninstall.ps1
+```
+
+Ferma e rimuove il servizio `ocr-cannabis-web` (ed eventuali altri con
+prefisso `ocr-cannabis-`) e l'attività pianificata di backup. **Non tocca**
+dati, database, log, backup, né l'infrastruttura condivisa (`infra-ollama`,
+`postgresql-x64-16`) — rimuovili a mano, deliberatamente, se non servono
+più. `-MantieniAttivitaBackup` lascia attiva l'attività pianificata (utile
+se il database resta al suo posto e si vuole continuare a fare backup).
+
+## 11. Dopo un riavvio del server
 
 Il server si riavvia da solo con gli aggiornamenti Windows — tutto deve
-ripartire in automatico. I servizi WinSW sono configurati con avvio
-automatico **ritardato** (`delayedAutoStart`, lasciano partire prima i
+ripartire in automatico. Il servizio WinSW è configurato con avvio
+automatico **ritardato** (`delayedAutoStart`, lascia partire prima i
 servizi di sistema critici) e con riavvio automatico in caso di errore
 (`onfailure`, due tentativi con backoff prima di arrendersi).
 
@@ -315,23 +359,26 @@ Dopo ogni riavvio del server, controlla comunque:
 .\deploy\windows\status.ps1
 ```
 
-Se Postgres non fosse ancora pronto quando `ATS-Webapp` prova a partire
-(ordine di avvio dei servizi, raro ma possibile su un riavvio lento), il
-servizio webapp fallirà il primo avvio e **WinSW lo riprova da solo** dopo
-10 secondi — se dopo un paio di minuti `status.ps1` mostra ancora
-`ATS-Webapp` fermo, riavvialo a mano (`Restart-Service ATS-Webapp`) dopo
-aver verificato che Postgres sia `Running`.
+Se Postgres o Ollama non fossero ancora pronti quando `ocr-cannabis-web`
+prova a partire (ordine di avvio dei servizi, raro ma possibile su un
+riavvio lento), il servizio fallirà il primo avvio e **WinSW lo riprova da
+solo** dopo 10 secondi — se dopo un paio di minuti `status.ps1` mostra
+ancora `ocr-cannabis-web` fermo, verifica prima che `infra-ollama` e
+`postgresql-x64-16` siano `Running`, poi riavvialo a mano
+(`Restart-Service ocr-cannabis-web`).
 
-## 10. Risoluzione problemi rapida
+## 12. Risoluzione problemi rapida
 
 | Sintomo | Dove guardare |
 |---|---|
-| `/health` non risponde | `status.ps1`; log in `E:\apps\ocr-cannabis\logs\ats-webapp.log`; `Get-Service ATS-Webapp` |
-| L'app parte e si ferma subito | Log WinSW in `E:\apps\ocr-cannabis\logs\winsw\` (stdout/stderr del processo) — spesso `SESSION_SECRET_KEY` mancante o `STORAGE_LOCAL_DIR` non valido, l'app si rifiuta di partire con un errore esplicito in quei casi |
+| `/health` non risponde | `status.ps1`; log in `E:\apps\ocr-cannabis\logs\ats-webapp.log`; `Get-Service ocr-cannabis-web` |
+| `/health` risponde ma segnala Ollama o storage in errore | Lo stesso 200 non vuol dire che tutto funzioni: controlla `infra-ollama` (`Get-Service`) e `STORAGE_BACKEND`/`STORAGE_LOCAL_DIR` nel `.env` — solo il database giù porta `/health` a 503, gli altri due restano segnalati senza bloccare login/archivio |
+| Il servizio parte e si ferma subito | Log WinSW in `E:\apps\ocr-cannabis\logs\winsw\` (stdout/stderr del processo) — spesso `SESSION_SECRET_KEY` mancante o `STORAGE_LOCAL_DIR` non valido, l'app si rifiuta di partire con un errore esplicito in quei casi |
 | Un lotto resta bloccato "in corso" dopo un riavvio | Normale al primo avvio successivo: `recupera_elaborazioni_orfane()` lo rimette in stato di errore automaticamente — controlla il lotto in UI |
-| Pipeline lenta | `benchmark.py` per calibrare `OLLAMA_NUM_THREAD_PESANTE`/`_LEGGERO` e `PIPELINE_PARALLELISMO` su questo hardware specifico |
-| "database is locked" o simili errori Postgres | Verifica `Get-Service postgresql*`; controlla che `POSTGRES_HOST/PORT` nel `.env` puntino davvero a `localhost` |
-| Upload rifiutato con 413 | `MAX_UPLOAD_SIZE_MB` nel `.env` (default 200) — alzalo se servono PDF più grandi |
+| Pipeline lenta | `benchmark.ps1` (sezione 6) per calibrare `OLLAMA_NUM_THREAD_PESANTE`/`_LEGGERO` e `PIPELINE_PARALLELISMO` su questo hardware |
+| Login/pagine rotti, link che puntano alla radice invece che a `/cannabis/...` | `ROOT_PATH` nel `.env` non corrisponde al percorso configurato in IIS — vedi sezione 4 |
+| Errore di autenticazione Postgres durante `install.ps1` | Password del superuser `postgres` sbagliata (chiesta a ogni giro, non salvata) — verifica anche `Get-Service postgresql-x64-16` |
+| Upload rifiutato con 413 | `MAX_UPLOAD_SIZE_MB` nel `.env` (default 500, coerente col limite IIS) — un upload troppo grande dal wizard mostra comunque un errore leggibile sulla stessa pagina, non un 413 nudo |
 | File scritti nel posto sbagliato / mancanti dopo un lotto | `STORAGE_BACKEND`/`STORAGE_LOCAL_DIR` nel `.env` — in produzione l'app si rifiuta di partire se questo è configurato male, ma verificalo comunque se qualcosa sembra finito nel posto sbagliato |
 
 Per qualunque problema non coperto qui: i log della webapp

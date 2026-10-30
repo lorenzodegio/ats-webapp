@@ -102,17 +102,33 @@ nativo** invece che in container, riusando `docker/run_fase.py` così com'è.
 La macchina ATS con GPU continua a usare Docker normalmente: è una scelta
 per MACCHINA (`PIPELINE_RUNNER`), non per lotto.
 
+Sul server, `app` (questa repo) e `pipeline` (repo SEPARATA
+`ocr-cannabis-ats`) sono due checkout git **affiancati**, non uno dentro
+l'altro (`E:\apps\ocr-cannabis\app\` e `E:\apps\ocr-cannabis\pipeline\`) —
+`farmacie_dizionario.py`/`profilo_layout_etichetta.py` qui in questa repo
+sono vendorizzati solo per comodità di sviluppo su questa macchina, vanno
+allineati con la repo pipeline vera quando si tocca la logica di lookup
+farmacie/profili (vedi i commit relativi sul branch `deploy/windows-server`).
+Nessun utente di servizio dedicato: i servizi girano con l'utenza unica
+del progetto (account amministratore esistente), password chiesta
+all'installazione via `Read-Host -AsSecureString` (mai da Claude Code, che
+non può rispondere a prompt interattivi).
+
 Riepilogo delle differenze rispetto allo sviluppo locale (dettagli completi
 in `DEPLOY_WINDOWS.md`):
 - `PIPELINE_RUNNER=docker|local` — in locale lancia `PIPELINE_PYTHON
-  <PIPELINE_DIR>/docker/run_fase.py <fase>`; pausa/ripresa/annullamento con
-  `psutil` (suspend/resume/terminate sull'intero albero di processi) invece
-  di `docker pause/unpause/kill`.
+  <questa-repo>/docker/run_fase.py <fase>` (lo script resta nella repo
+  webapp, lanciato da qui indipendentemente da dove vive `PIPELINE_DIR`),
+  con `PIPELINE_DIR` (repo pipeline separata) in `sys.path` per gli import;
+  pausa/ripresa/annullamento con `psutil` (suspend/resume/terminate
+  sull'intero albero di processi) invece di `docker pause/unpause/kill`.
 - `STORAGE_BACKEND=onedrive|local` (`app/storage.py`) — `local` è il default
   in produzione (cartella Windows fissa, `STORAGE_LOCAL_DIR`), niente
   OneDrive sul server. Con `APP_ENV=production` il fallback silenzioso su
   `sharepoint_finto/` è disattivato: un percorso non valido blocca
-  l'operazione (o l'avvio dell'app) invece di scrivere altrove in silenzio.
+  l'operazione (o l'avvio dell'app) invece di scrivere altrove in silenzio
+  — vale anche per la correzione manuale del barcode (`correggi_barcode_
+  reale`), non solo per le fasi automatiche.
 - Schema DB gestito con **Alembic** (`alembic/`, baseline nella prima
   revisione) quando `APP_ENV=production` — `Base.metadata.create_all()`
   resta attivo solo fuori produzione. Un DB esistente creato con
@@ -120,21 +136,33 @@ in `DEPLOY_WINDOWS.md`):
 - `SESSION_SECRET_KEY` obbligatoria in produzione (l'app non parte senza).
   `seed_admin.py` accetta `ADMIN_INITIAL_PASSWORD` per l'installer, niente
   prompt interattivo e nessun default.
+- `ROOT_PATH` (`.env` + flag `--root-path` a uvicorn) per far funzionare
+  l'app sotto un prefisso IIS (es. `/cannabis`): nessuna route usa
+  `url_for()`, quindi redirect/template/JS usano tutti `app/root_path.py`
+  (stesso nome `RedirectResponse`, basta cambiare l'import) per anteporre
+  il prefisso — vedi `app/root_path.py` prima di aggiungere un nuovo
+  redirect o un nuovo link con percorso assoluto scritto a mano.
 - Dipendenze gestite con `uv`: `pyproject.toml`/`uv.lock` alla radice per la
   webapp, `docker/pyproject.toml`/`docker/uv.lock` per la pipeline (ambiente
-  Python **separato**, torch dalla build CPU-only). `requirements.txt` e
-  `docker/requirements.txt` restano le fonti per le immagini Docker
-  (macchina GPU), invariate.
+  Python **separato**, torch dalla build CPU-only, `PyMuPDF<2.0` per
+  evitare che la 2.0 porti dentro `onnxruntime` solo per renderizzare una
+  pagina PDF). `requirements.txt` e `docker/requirements.txt` restano le
+  fonti per le immagini Docker (macchina GPU), invariate.
 - EasyOCR forzato `gpu=False` quando CUDA non è disponibile (prima leggeva
   per sbaglio `NUM_GPU`, una manopola specifica di Ollama). `num_thread`
   configurabile per modello pesante/leggero via `.env`
   (`OLLAMA_NUM_THREAD_PESANTE`/`_LEGGERO`), `NUM_CTX` ora letto da env.
-- `/health`, limite dimensione upload, cookie `Secure` in produzione, log
-  della webapp con rotazione su file (`LOG_DIR`) — il canale che inoltra
-  l'output grezzo della pipeline (può contenere dati di prescrizione) resta
-  **solo** nel DB e in console, mai nel file di log su disco.
-- Script operativi in `deploy/windows/` (install/update/backup/restore/status)
-  e `benchmark.py` per calibrare thread/parallelismo sulle vCPU disponibili.
+- `/health` copre database, Ollama (richiesta HTTP diretta) e storage
+  configurato — solo il DB giù porta lo status a 503 (riavvio via WinSW);
+  limite upload coerente con IIS (500 MB, errore leggibile nel wizard, non
+  un 413 nudo); cookie `Secure` in produzione; log della webapp con
+  rotazione su file (`LOG_DIR`) — il canale che inoltra l'output grezzo
+  della pipeline (può contenere dati di prescrizione) resta **solo** nel
+  DB e in console, mai nel file di log su disco.
+- Script operativi in `deploy/windows/` (install/update/backup/restore/
+  status/uninstall/benchmark) — nessun utente/servizio Ollama registrato
+  da `install.ps1` (è infrastruttura condivisa pre-esistente, `infra-ollama`,
+  modelli già scaricati): solo verificato, mai installato.
 
 ## Design system (rispettare sempre, non inventare nuove classi)
 - Palette: forest #2B3B35, sage #6B9080, sageLight #A4C3B2, terracotta #C9895B

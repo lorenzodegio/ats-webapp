@@ -7,22 +7,24 @@
 
 . (Join-Path $PSScriptRoot "common.ps1")
 
-Write-Step "Servizi Windows"
-foreach ($nome in @($ServiceOllama, $ServiceWebapp)) {
-    $svc = Get-Service -Name $nome -ErrorAction SilentlyContinue
-    if ($svc) {
-        $colore = if ($svc.Status -eq "Running") { "Green" } else { "Red" }
-        Write-Host ("    {0,-20} {1}" -f $nome, $svc.Status) -ForegroundColor $colore
-    } else {
-        Write-Host ("    {0,-20} non registrato" -f $nome) -ForegroundColor Red
-    }
-}
-$pgSvc = Get-Service -Name "postgresql*" -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($pgSvc) {
-    $colore = if ($pgSvc.Status -eq "Running") { "Green" } else { "Red" }
-    Write-Host ("    {0,-20} {1}" -f $pgSvc.Name, $pgSvc.Status) -ForegroundColor $colore
+Write-Step "Servizio webapp"
+$svc = Get-Service -Name $ServiceWebapp -ErrorAction SilentlyContinue
+if ($svc) {
+    $colore = if ($svc.Status -eq "Running") { "Green" } else { "Red" }
+    Write-Host ("    {0,-20} {1}" -f $ServiceWebapp, $svc.Status) -ForegroundColor $colore
 } else {
-    Write-Avviso "Nessun servizio 'postgresql*' trovato."
+    Write-Host ("    {0,-20} non registrato" -f $ServiceWebapp) -ForegroundColor Red
+}
+
+Write-Step "Infrastruttura condivisa (non gestita da questi script)"
+foreach ($nome in @($ServizioOllamaEsterno, $ServizioPostgresEsterno)) {
+    $svcEsterno = Get-Service -Name $nome -ErrorAction SilentlyContinue
+    if ($svcEsterno) {
+        $colore = if ($svcEsterno.Status -eq "Running") { "Green" } else { "Red" }
+        Write-Host ("    {0,-20} {1}" -f $nome, $svcEsterno.Status) -ForegroundColor $colore
+    } else {
+        Write-Host ("    {0,-20} non trovato" -f $nome) -ForegroundColor Red
+    }
 }
 
 Write-Step "/health"

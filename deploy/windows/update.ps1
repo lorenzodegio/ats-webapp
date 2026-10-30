@@ -38,7 +38,7 @@ try {
 
     Write-Step "Sincronizzo le dipendenze (uv sync, webapp + pipeline)"
     uv sync
-    Push-Location (Join-Path $RepoRoot "docker")
+    Push-Location $PipelineRoot
     try { uv sync } finally { Pop-Location }
 
     Write-Step "Applico eventuali nuove migrazioni Alembic"
@@ -49,14 +49,14 @@ try {
     Pop-Location
 }
 
-Write-Step "Riavvio i servizi"
+Write-Step "Riavvio il servizio webapp"
 Invoke-ServiceControl -Nome $ServiceWebapp -Azione restart
-# Ollama di norma non cambia da un aggiornamento del codice applicativo  - 
-# riavviato solo se esplicitamente fermo (es. dopo un riavvio del server
-# in cui per qualche motivo non fosse ripartito da solo).
-$ollamaSvc = Get-Service -Name $ServiceOllama -ErrorAction SilentlyContinue
-if ($ollamaSvc -and $ollamaSvc.Status -ne "Running") {
-    Invoke-ServiceControl -Nome $ServiceOllama -Azione start
+# Infra-ollama e' condiviso, non gestito da questo script: solo un
+# controllo in lettura, nessun riavvio automatico di un servizio che
+# potrebbe essere usato anche da altro.
+$ollamaSvc = Get-Service -Name $ServizioOllamaEsterno -ErrorAction SilentlyContinue
+if (-not $ollamaSvc -or $ollamaSvc.Status -ne "Running") {
+    Write-Avviso "Servizio '$ServizioOllamaEsterno' non in esecuzione  -  avvialo (non e' gestito da update.ps1)."
 }
 
 Write-Step "Verifico /health"
