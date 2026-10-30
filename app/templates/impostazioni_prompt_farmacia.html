@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block titolo %}Prompt farmacie — {{ farmacia.nome }} — ATS Gestione Prescrizioni Cannabis{% endblock %}
+
+{% block contenuto %}
+<div class="main__header">
+  <div>
+    <h1>Prompt farmacie — {{ farmacia.nome }}</h1>
+    <div class="sottotitolo">Dove si trova l'etichetta e dove si trovano i campi da leggere, disegnati su una ricetta di esempio</div>
+  </div>
+  <a href="/impostazioni?tab=prompt_farmacie" class="btn btn--secondario">&larr; Torna all'elenco</a>
+</div>
+
+{% if errore %}
+<div class="errore-form">{{ errore }}</div>
+{% endif %}
+{% if ok %}
+<div class="ok-form">Operazione completata ({{ ok }}).</div>
+{% endif %}
+
+<div class="card">
+  <h2 class="card__titolo">PDF di esempio</h2>
+  <p style="font-size:13px; color: var(--text-secondary); margin-top:-8px;">
+    Una ricetta reale di questa farmacia, usata solo per disegnare i rettangoli — non viene elaborata.
+  </p>
+  <form method="post" action="/impostazioni/prompt-farmacie/{{ farmacia.id }}/carica-esempio" enctype="multipart/form-data">
+    <div class="filtri-riga">
+      <input type="file" name="file_pdf" accept="application/pdf" required>
+      <button type="submit" class="btn btn--secondario">{{ 'Sostituisci PDF di esempio' if ha_anteprima else 'Carica PDF di esempio' }}</button>
+    </div>
+  </form>
+</div>
+
+{% if ha_anteprima %}
+<form method="post" action="/impostazioni/prompt-farmacie/{{ farmacia.id }}/salva" id="form-prompt-farmacia">
+  <div class="card">
+    <h2 class="card__titolo">Rilevamento presenza etichetta</h2>
+    <div class="campo">
+      <label for="parole_guida_presenza">Parole-guida (separate da virgola)</label>
+      <input type="text" id="parole_guida_presenza" name="parole_guida_presenza"
+             value="{{ (profilo.parole_guida_presenza or []) | join(', ') }}"
+             placeholder="es. AVIGNO, POMI">
+      <div class="sottotitolo" style="margin-top:4px;">Se l'OCR legge una di queste parole (anche con piccoli refusi) vicino al modulo CODICE/NUMERO, l'etichetta e' considerata presente. Lascia vuoto per usare il rilevamento generico.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="card__titolo">Area dell'etichetta e dei campi</h2>
+    <ol style="font-size:13px; color: var(--text-secondary); margin-top:-8px; padding-left:18px;">
+      <li>Aggiungi un campo (o usa "Disegna area etichetta" per l'area generale, opzionale)</li>
+      <li>Premi il suo pulsante "Disegna rettangolo"</li>
+      <li>Trascina con il mouse sull'immagine, dall'angolo in alto a sinistra a quello in basso a destra del campo</li>
+      <li>Scrivi il nome del campo (es. <span class="mono">data_etichetta_preparazione</span>), poi ripeti per gli altri campi</li>
+      <li>In fondo alla pagina, premi "Salva profilo"</li>
+    </ol>
+
+    <div id="banner-modalita-disegno" class="banner-modalita-disegno" hidden>
+      Modalita' disegno attiva — trascina sull'immagine qui sotto
+    </div>
+
+    <div class="filtri-riga" style="margin-bottom:12px;">
+      <button type="button" class="btn btn--secondario" data-disegna-etichetta>Disegna area etichetta</button>
+      <button type="button" class="btn btn--secondario" data-cancella-etichetta>Cancella area etichetta</button>
+      <span class="sottotitolo" id="stato-rett-etichetta"></span>
+    </div>
+
+    <div id="anteprima-wrap" class="anteprima-etichetta-wrap">
+      <img id="anteprima-img" src="/impostazioni/prompt-farmacie/{{ farmacia.id }}/anteprima.png" alt="Anteprima ricetta" draggable="false">
+      <div id="anteprima-overlay" class="anteprima-etichetta-overlay"></div>
+    </div>
+
+    <input type="hidden" id="rettangolo_etichetta_x1" name="rettangolo_etichetta_x1" value="{{ profilo.rettangolo_etichetta_x1 if profilo else '' }}">
+    <input type="hidden" id="rettangolo_etichetta_y1" name="rettangolo_etichetta_y1" value="{{ profilo.rettangolo_etichetta_y1 if profilo else '' }}">
+    <input type="hidden" id="rettangolo_etichetta_x2" name="rettangolo_etichetta_x2" value="{{ profilo.rettangolo_etichetta_x2 if profilo else '' }}">
+    <input type="hidden" id="rettangolo_etichetta_y2" name="rettangolo_etichetta_y2" value="{{ profilo.rettangolo_etichetta_y2 if profilo else '' }}">
+
+    <h3 style="margin-top:24px; font-size:15px;">Campi</h3>
+    <div id="lista-campi"></div>
+    <div class="filtri-riga" style="margin-top:8px;">
+      <button type="button" class="btn btn--secondario" id="aggiungi-campo">+ Aggiungi campo</button>
+    </div>
+  </div>
+
+  <div class="filtri-riga">
+    <button type="submit" class="btn btn--primario">Salva profilo</button>
+  </div>
+</form>
+
+{% if profilo %}
+<form method="post" action="/impostazioni/prompt-farmacie/{{ farmacia.id }}/elimina"
+      onsubmit="return confirm('Eliminare il profilo di questa farmacia? La pipeline tornera\' al comportamento generico.');">
+  <button type="submit" class="btn btn--secondario" style="margin-top:8px;">Elimina profilo</button>
+</form>
+{% endif %}
+
+<template id="template-riga-campo">
+  <div class="riga-campo-profilo">
+    <div class="griglia-form">
+      <div class="campo">
+        <label>Nome campo</label>
+        <input type="text" name="campo_nome" list="nomi-campi-noti" placeholder="es. data_etichetta_preparazione" required>
+      </div>
+      <div class="campo">
+        <label>Parola-guida (opzionale)</label>
+        <input type="text" name="campo_parola_guida" placeholder="es. Prep">
+      </div>
+    </div>
+    <div class="filtri-riga">
+      <button type="button" class="btn btn--secondario" data-disegna-campo>Disegna rettangolo</button>
+      <button type="button" class="btn btn--secondario" data-cancella-campo>Cancella rettangolo</button>
+      <span class="sottotitolo" data-stato-rett-campo></span>
+      <button type="button" class="btn btn--secondario" data-rimuovi-campo style="margin-left:auto;">Rimuovi campo</button>
+    </div>
+    <input type="hidden" name="campo_x1">
+    <input type="hidden" name="campo_y1">
+    <input type="hidden" name="campo_x2">
+    <input type="hidden" name="campo_y2">
+  </div>
+</template>
+
+<datalist id="nomi-campi-noti">
+  <option value="data_etichetta_preparazione">
+</datalist>
+
+<script id="campi-esistenti" type="application/json">{{ campi_esistenti | tojson }}</script>
+{% endif %}
+{% endblock %}
+
+{% block script %}
+{% if ha_anteprima %}
+<script src="/static/js/prompt-farmacie.js"></script>
+{% endif %}
+{% endblock %}
