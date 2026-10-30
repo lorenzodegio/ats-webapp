@@ -1,7 +1,7 @@
-﻿<#
+<#
 .SYNOPSIS
     Backup giornaliero: dump Postgres (pg_dump, formato custom) + copia
-    della cartella data\ (storage locale, se STORAGE_BACKEND=local) — con
+    della cartella data\ (storage locale, se STORAGE_BACKEND=local)  -  con
     rotazione (default 14 giorni).
 
 .PARAMETER GiorniRotazione

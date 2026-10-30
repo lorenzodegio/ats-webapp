@@ -1,7 +1,7 @@
-﻿<#
+<#
 .SYNOPSIS
     Stato rapido dell'installazione: servizi Windows, /health, spazio su
-    disco, ultimi errori nei log — per una verifica veloce dopo un
+    disco, ultimi errori nei log  -  per una verifica veloce dopo un
     aggiornamento o un riavvio del server.
 #>
 
@@ -28,7 +28,7 @@ if ($pgSvc) {
 Write-Step "/health"
 try {
     $risposta = Invoke-WebRequest -Uri "http://127.0.0.1:8000/health" -UseBasicParsing -TimeoutSec 5
-    Write-Host "    HTTP $($risposta.StatusCode) — $($risposta.Content)" -ForegroundColor Green
+    Write-Host "    HTTP $($risposta.StatusCode)  -  $($risposta.Content)" -ForegroundColor Green
 } catch {
     Write-Host "    Non raggiungibile: $($_.Exception.Message)" -ForegroundColor Red
 }
@@ -48,7 +48,7 @@ Write-Step "Ultimi errori nei log della webapp (ultime 24 ore)"
 $logWebapp = Join-Path $LogsRoot "ats-webapp.log"
 if (Test-Path $logWebapp) {
     # Formato riga: "yyyy-MM-dd HH:mm:ss,fff [LIVELLO] ..." (vedi il
-    # Formatter in app/main.py) — confrontabile come stringa perche'
+    # Formatter in app/main.py)  -  confrontabile come stringa perche'
     # ISO-simile, senza dover fare il parsing di ogni riga.
     $sogliaTesto = (Get-Date).AddHours(-24).ToString("yyyy-MM-dd HH:mm:ss")
     $righeErrore = Get-Content $logWebapp -Tail 2000 | Where-Object {

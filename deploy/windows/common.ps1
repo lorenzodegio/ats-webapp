@@ -1,7 +1,7 @@
-﻿<#
+<#
 .SYNOPSIS
     Valori e funzioni condivise da install.ps1/update.ps1/backup.ps1/
-    restore.ps1/status.ps1 — dot-sorgente (". .\common.ps1"), mai eseguito
+    restore.ps1/status.ps1  -  dot-sorgente (". .\common.ps1"), mai eseguito
     da solo.
 
 .DESCRIPTION
@@ -15,7 +15,7 @@
       E:\apps\ocr-cannabis\logs            log della webapp (rotazione)
       E:\apps\ocr-cannabis\backup          dump Postgres + copie di data\
 
-    NON TESTATO su un vero Windows Server — scritto leggendo il codice reale
+    NON TESTATO su un vero Windows Server  -  scritto leggendo il codice reale
     (app/database.py, app/storage.py, alembic/, pyproject.toml) e la
     convenzione del progetto, ma verificalo con attenzione al primo uso
     reale (vedi "Verifica" in DEPLOY_WINDOWS.md) prima di fidartene in
@@ -24,7 +24,7 @@
 
 $ErrorActionPreference = "Stop"
 
-# ── Layout ──────────────────────────────────────────────────────────────
+# -- Layout --------------------------------------------------------------
 $script:RepoRoot   = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $script:InfraRoot  = if ($env:ATS_INFRA_ROOT) { $env:ATS_INFRA_ROOT } else { "E:\infra" }
 $script:OllamaRoot = Join-Path $InfraRoot "ollama"
@@ -35,12 +35,12 @@ $script:BackupRoot = Join-Path $RepoRoot "backup"
 $script:PipelineVenv = Join-Path $RepoRoot "docker\.venv"
 $script:WebappVenv   = Join-Path $RepoRoot ".venv"
 
-# ── Servizi Windows (WinSW) ─────────────────────────────────────────────
+# -- Servizi Windows (WinSW) ---------------------------------------------
 $script:ServicePrefix  = "ATS-"
 $script:ServiceOllama  = "${ServicePrefix}Ollama"
 $script:ServiceWebapp  = "${ServicePrefix}Webapp"
 
-# ── Utente dedicato ──────────────────────────────────────────────────────
+# -- Utente dedicato ------------------------------------------------------
 $script:ServiceAccount = if ($env:ATS_SERVICE_ACCOUNT) { $env:ATS_SERVICE_ACCOUNT } else { "$env:COMPUTERNAME\svc_ocr" }
 
 function Write-Step {
@@ -65,13 +65,13 @@ function Test-Amministratore {
 function Get-DotEnvPath {
     $percorso = Join-Path $RepoRoot ".env"
     if (-not (Test-Path $percorso)) {
-        throw "Non trovo $percorso — copia .env.example in .env e configuralo prima di procedere."
+        throw "Non trovo $percorso  -  copia .env.example in .env e configuralo prima di procedere."
     }
     return $percorso
 }
 
 function Get-DotEnvValue {
-    <# Legge UN valore da .env senza eseguirlo come script — per riusare le
+    <# Legge UN valore da .env senza eseguirlo come script  -  per riusare le
        stesse credenziali Postgres gia' configurate per la webapp, invece
        di chiederle una seconda volta o duplicarle in un file diverso. #>
     param([Parameter(Mandatory)][string]$Chiave, [string]$Default = "")
@@ -86,7 +86,7 @@ function Get-DotEnvValue {
 
 function Get-ConnessionePostgres {
     <# Ritorna un hashtable con host/porta/db/utente/password letti da .env
-       (stessa fonte di app/database.py) — usato da backup/restore. #>
+       (stessa fonte di app/database.py)  -  usato da backup/restore. #>
     return @{
         Host     = Get-DotEnvValue -Chiave "POSTGRES_HOST" -Default "localhost"
         Porta    = Get-DotEnvValue -Chiave "POSTGRES_PORT" -Default "5432"
@@ -98,7 +98,7 @@ function Get-ConnessionePostgres {
 
 function Find-PsqlBin {
     <# Gli strumenti a riga di comando di PostgreSQL non sono sempre nel
-       PATH dopo un'installazione standard — cerca nelle posizioni tipiche
+       PATH dopo un'installazione standard  -  cerca nelle posizioni tipiche
        prima di arrendersi. #>
     $candidati = @("psql.exe", "createdb.exe", "pg_dump.exe") | ForEach-Object {
         $cmd = Get-Command $_ -ErrorAction SilentlyContinue
@@ -108,14 +108,14 @@ function Find-PsqlBin {
     $pattern = "C:\Program Files\PostgreSQL\*\bin"
     $trovato = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
     if ($trovato) { return $trovato.FullName }
-    throw "Non trovo gli strumenti psql/pg_dump/createdb — aggiungi 'C:\Program Files\PostgreSQL\<versione>\bin' al PATH di sistema."
+    throw "Non trovo gli strumenti psql/pg_dump/createdb  -  aggiungi 'C:\Program Files\PostgreSQL\<versione>\bin' al PATH di sistema."
 }
 
 function Invoke-ServiceControl {
     param([Parameter(Mandatory)][string]$Nome, [Parameter(Mandatory)][ValidateSet("start", "stop", "restart")][string]$Azione)
     $servizio = Get-Service -Name $Nome -ErrorAction SilentlyContinue
     if (-not $servizio) {
-        Write-Avviso "Servizio '$Nome' non registrato — esegui prima install.ps1."
+        Write-Avviso "Servizio '$Nome' non registrato  -  esegui prima install.ps1."
         return
     }
     switch ($Azione) {

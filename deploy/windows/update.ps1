@@ -1,7 +1,7 @@
-﻿<#
+<#
 .SYNOPSIS
     Aggiorna il codice (git pull), le dipendenze (uv sync), applica le
-    migrazioni Alembic e riavvia i servizi — con verifica finale su /health.
+    migrazioni Alembic e riavvia i servizi  -  con verifica finale su /health.
 
 .DESCRIPTION
     Si ferma al primo errore (fail fast): se le migrazioni falliscono, i
@@ -28,7 +28,7 @@ try {
 
     $modifiche = git status --porcelain
     if ($modifiche) {
-        throw "Ci sono modifiche non committate nel repository — risolvile (commit/stash) prima di aggiornare, 'git pull' si rifiuterebbe altrimenti."
+        throw "Ci sono modifiche non committate nel repository  -  risolvile (commit/stash) prima di aggiornare, 'git pull' si rifiuterebbe altrimenti."
     }
 
     Write-Step "git pull ($targetBranch)"
@@ -44,14 +44,14 @@ try {
     Write-Step "Applico eventuali nuove migrazioni Alembic"
     $webappPython = Join-Path $WebappVenv "Scripts\python.exe"
     & $webappPython -m alembic upgrade head
-    if ($LASTEXITCODE -ne 0) { throw "alembic upgrade head ha restituito un errore (codice $LASTEXITCODE) — i servizi NON vengono riavviati." }
+    if ($LASTEXITCODE -ne 0) { throw "alembic upgrade head ha restituito un errore (codice $LASTEXITCODE)  -  i servizi NON vengono riavviati." }
 } finally {
     Pop-Location
 }
 
 Write-Step "Riavvio i servizi"
 Invoke-ServiceControl -Nome $ServiceWebapp -Azione restart
-# Ollama di norma non cambia da un aggiornamento del codice applicativo —
+# Ollama di norma non cambia da un aggiornamento del codice applicativo  - 
 # riavviato solo se esplicitamente fermo (es. dopo un riavvio del server
 # in cui per qualche motivo non fosse ripartito da solo).
 $ollamaSvc = Get-Service -Name $ServiceOllama -ErrorAction SilentlyContinue
@@ -61,8 +61,8 @@ if ($ollamaSvc -and $ollamaSvc.Status -ne "Running") {
 
 Write-Step "Verifico /health"
 if (Test-Health) {
-    Write-Host "OK — l'app risponde ed e' collegata al database." -ForegroundColor Green
+    Write-Host "OK  -  l'app risponde ed e' collegata al database." -ForegroundColor Green
 } else {
-    Write-Host "L'app NON risponde su /health dopo il riavvio — controlla i log in $LogsRoot e lo stato con .\status.ps1" -ForegroundColor Red
+    Write-Host "L'app NON risponde su /health dopo il riavvio  -  controlla i log in $LogsRoot e lo stato con .\status.ps1" -ForegroundColor Red
     exit 1
 }

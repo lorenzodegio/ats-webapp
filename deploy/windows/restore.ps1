@@ -1,6 +1,6 @@
-﻿<#
+<#
 .SYNOPSIS
-    Ripristina un backup creato da backup.ps1 — database Postgres e,
+    Ripristina un backup creato da backup.ps1  -  database Postgres e,
     opzionalmente, la cartella data\.
 
 .DESCRIPTION
@@ -30,7 +30,7 @@ if (-not (Test-Path $CartellaBackup)) {
 $conn = Get-ConnessionePostgres
 $dumpPath = Join-Path $CartellaBackup "$($conn.Db).dump"
 if (-not (Test-Path $dumpPath)) {
-    throw "Dump non trovato in $dumpPath — la cartella e' davvero un backup prodotto da backup.ps1?"
+    throw "Dump non trovato in $dumpPath  -  la cartella e' davvero un backup prodotto da backup.ps1?"
 }
 
 Write-Host ""
@@ -54,7 +54,7 @@ $env:Path = "$pgBin;$env:Path"
 $env:PGPASSWORD = $conn.Password
 try {
     & pg_restore -h $conn.Host -p $conn.Porta -U $conn.Utente -d $conn.Db --clean --if-exists $dumpPath
-    if ($LASTEXITCODE -ne 0) { Write-Avviso "pg_restore ha restituito codice $LASTEXITCODE — controlla l'output sopra: alcuni avvisi (es. oggetti che 'non esistono' durante --clean) sono normali, un fallimento totale non lo e'." }
+    if ($LASTEXITCODE -ne 0) { Write-Avviso "pg_restore ha restituito codice $LASTEXITCODE  -  controlla l'output sopra: alcuni avvisi (es. oggetti che 'non esistono' durante --clean) sono normali, un fallimento totale non lo e'." }
 } finally {
     Remove-Item Env:\PGPASSWORD -ErrorAction SilentlyContinue
 }
@@ -76,5 +76,5 @@ Invoke-ServiceControl -Nome $ServiceWebapp -Azione start
 if (Test-Health) {
     Write-Host "Ripristino completato, l'app risponde su /health." -ForegroundColor Green
 } else {
-    Write-Host "Ripristino eseguito ma l'app NON risponde su /health — controlla i log." -ForegroundColor Red
+    Write-Host "Ripristino eseguito ma l'app NON risponde su /health  -  controlla i log." -ForegroundColor Red
 }
