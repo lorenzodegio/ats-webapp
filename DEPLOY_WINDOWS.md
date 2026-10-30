@@ -111,6 +111,8 @@ A questo punto **apri `E:\apps\ocr-cannabis\.env` e compilalo**, almeno:
 | `STORAGE_LOCAL_DIR` | `E:\apps\ocr-cannabis\data\storage` |
 | `EASYOCR_MODEL_DIR` | `E:\apps\ocr-cannabis\data\models\easyocr` |
 | `LOG_DIR` | `E:\apps\ocr-cannabis\logs` |
+| `APP_PORT` | `8000` (default, da cambiare solo se quella porta è già in uso) |
+| `ROOT_PATH` | vuota se il sito IIS serve l'app alla radice, altrimenti il prefisso (es. `/cannabis`) — vedi sezione 4 |
 
 Poi rilancia (idempotente, salta quanto già fatto):
 
@@ -163,10 +165,17 @@ firewall. Passi (una tantum):
    `http://localhost:8000` (la webapp ascolta solo su `127.0.0.1:8000`,
    mai esposta direttamente).
 5. Se il sito IIS serve l'app sotto un percorso diverso dalla radice (es.
-   `https://server/ats/` invece di `https://server/`), imposta `ROOT_PATH`
-   nel `.env` (es. `ROOT_PATH=/ats`) e rilancia `install.ps1` (o
-   `update.ps1`) per rigenerare il comando del servizio con
-   `--root-path /ats`.
+   `https://server/cannabis/` invece di `https://server/`, col prefisso
+   TOLTO da IIS prima di passare la richiesta a uvicorn), imposta
+   `ROOT_PATH` nel `.env` (es. `ROOT_PATH=/cannabis`) e rilancia
+   `install.ps1` (o `update.ps1`) per rigenerare il comando del servizio
+   con `--root-path /cannabis`. Oltre al flag passato a uvicorn, l'app
+   stessa usa la stessa variabile per anteporre il prefisso a redirect,
+   link nei template e chiamate `fetch()` in JS (nessuna di queste route
+   usa `url_for`, quindi il meccanismo nativo di Starlette da solo non
+   basterebbe — vedi `app/root_path.py`): imposta lo stesso valore su
+   entrambi i lati (IIS e `.env`), altrimenti i link generati dall'app
+   non corrisponderanno al percorso esterno reale.
 6. Apri la porta 443 (o quella usata) sul firewall di Windows, se non già
    aperta.
 
@@ -205,6 +214,39 @@ uno schema a metà strada — risolvi il problema prima di ripetere.
 
 Si rifiuta di partire se ci sono modifiche non committate nel repository
 (evita che `git pull` fallisca a metà in un modo confuso).
+
+### Creare una nuova migrazione
+
+Quando si cambia `app/models.py` (nuovo campo, nuova tabella), serve una
+nuova revisione Alembic — `create_all()` è attivo solo fuori produzione
+(`APP_ENV` diverso da `production`), quindi in produzione lo schema si
+aggiorna SOLO con `alembic upgrade head`, mai da solo.
+
+Dalla macchina di sviluppo (non sul server), con un database Postgres di
+prova aggiornato all'ultima revisione esistente:
+
+```powershell
+# dalla radice del repository, ambiente della webapp attivo
+alembic revision --autogenerate -m "descrizione breve della modifica"
+```
+
+Poi, SEMPRE a mano:
+1. Apri il file generato in `alembic/versions/` e controlla `upgrade()`/
+   `downgrade()` — l'autogenerate può perdere dettagli (default lato
+   server, vincoli CHECK, rinomina di una colonna vista come
+   drop+add — vedi la nota nel file della baseline per un bug reale già
+   capitato: import mancante di `app.db_types`, necessario per il tipo
+   `GUID()` usato in quasi tutte le tabelle).
+2. Testa `alembic upgrade head` E `alembic downgrade -1` su un database
+   Postgres vuoto o di prova — mai direttamente sul database di
+   produzione.
+3. Committa il file di migrazione insieme alla modifica di
+   `app/models.py` che la richiede, nello stesso commit.
+
+Sul server, `update.ps1` applica la nuova revisione con `alembic upgrade
+head` durante il normale aggiornamento (vedi sopra) — nessun passo
+manuale aggiuntivo, a patto che la migrazione sia stata creata e
+verificata come sopra.
 
 ## 7. Backup e ripristino
 
