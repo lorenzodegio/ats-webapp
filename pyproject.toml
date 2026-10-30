@@ -19,6 +19,7 @@ dependencies = [
     "pypdf>=5.0.0",
     "psutil>=6.0.0",
     "alembic>=1.13.0",
+    "PyMuPDF>=1.24.0,<2.0",
 ]
 
 # requirements.txt resta la fonte usata da docker/Dockerfile.web (build

@@ -19,6 +19,7 @@
 <div class="tab-bar" role="tablist">
   <a href="/impostazioni?tab=farmacie" class="tab-bar__voce {% if tab == 'farmacie' %}tab-bar__voce--attivo{% endif %}">Farmacie</a>
   <a href="/impostazioni?tab=sistema" class="tab-bar__voce {% if tab == 'sistema' %}tab-bar__voce--attivo{% endif %}">Sistema</a>
+  <a href="/impostazioni?tab=prompt_farmacie" class="tab-bar__voce {% if tab == 'prompt_farmacie' %}tab-bar__voce--attivo{% endif %}">Prompt farmacie</a>
 </div>
 
 {% if tab == 'farmacie' %}
@@ -167,6 +168,50 @@
   </table>
   {% else %}
   <div class="stato-vuoto">Nessuna configurazione in database. Esegui <span class="mono">python seed_admin.py</span>.</div>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if tab == 'prompt_farmacie' %}
+<div class="card">
+  <h2 class="card__titolo">Prompt farmacie</h2>
+  <p style="font-size:13px; color: var(--text-secondary); margin-top:-8px;">
+    Per ogni farmacia si può definire dove si trova l'etichetta sulla ricetta e dove si trovano i singoli campi da leggere, disegnando rettangoli su un PDF di esempio — al posto di affidarsi solo al confronto automatico, utile per i layout più irregolari.
+  </p>
+  {% if farmacie %}
+  <table class="tabella">
+    <thead>
+      <tr>
+        <th>Farmacia</th>
+        <th>Profilo</th>
+        <th>Campi configurati</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for f in farmacie %}
+      {% set p = profili_per_farmacia.get(f.id | string) %}
+      <tr>
+        <td><strong>{{ f.nome }}</strong></td>
+        <td>
+          {% if p %}
+          <span class="badge badge--completato">Configurato</span>
+          {% else %}
+          <span class="badge badge--in-coda">Non configurato</span>
+          {% endif %}
+        </td>
+        <td class="mono">{{ p.campi | length if p else 0 }}</td>
+        <td>
+          <a href="/impostazioni/prompt-farmacie/{{ f.id }}" class="btn btn--secondario" style="padding:6px 10px; font-size:12px;">
+            {{ 'Modifica' if p else 'Configura' }}
+          </a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="stato-vuoto">Nessuna farmacia in anagrafica. Aggiungine una dal tab Farmacie prima di configurare un profilo.</div>
   {% endif %}
 </div>
 {% endif %}

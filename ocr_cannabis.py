@@ -1954,6 +1954,20 @@ def estrai_dati(pdf_path: Path) -> dict:
                 )
             except Exception as e:
                 log.warning(f'Errore correzione etichetta per farmacia: {e}')
+
+            # Profilo di layout strutturato (profilo_layout_etichetta.py):
+            # per le farmacie con un profilo registrato (REGISTRO_PROFILI_LAYOUT),
+            # rilegge con crop dedicati i campi configurati dall'operatore — il
+            # valore letto qui ha priorità e sovrascrive quello del passaggio
+            # whole-label appena sopra. Per le farmacie senza profilo (ancora
+            # tutte, finché non esiste un'interfaccia operatore per crearli)
+            # non fa nulla: nessun cambiamento di comportamento.
+            try:
+                dati = corrector.correggi_campi_profilati(
+                    dati, pdf_path, nome_farmacia_da_regione=nome_farmacia_da_regione
+                )
+            except Exception as e:
+                log.warning(f'Errore correzione campi profilati: {e}')
         else:
             log.info("  Etichetta confermata assente — salto la rilettura per profilo farmacia")
 

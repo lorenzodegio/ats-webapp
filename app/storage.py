@@ -191,6 +191,15 @@ def cartella_pagine_lotto(lotto_id) -> Path:
     return percorso
 
 
+def cartella_profilo_layout(farmacia_id) -> Path:
+    """PDF di esempio + anteprima caricati in Impostazioni -> Prompt farmacie,
+    usati solo per disegnare i rettangoli — stesso principio di
+    cartella_originale_lotto(), non sincronizzati su SharePoint."""
+    percorso = MEDIA_ROOT / "profili_layout" / str(farmacia_id)
+    percorso.mkdir(parents=True, exist_ok=True)
+    return percorso
+
+
 def relativo_a_radice(percorso: Path) -> str:
     risolto = percorso.resolve()
     try:

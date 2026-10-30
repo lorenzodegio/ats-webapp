@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "ATS Insubria — ambiente Python della pipeline OCR (processo nativo, PIPELINE_RUNNER=local)"
 requires-python = ">=3.11"
 dependencies = [
-    "PyMuPDF",
+    "PyMuPDF<2.0",
     "opencv-python-headless",
     "numpy",
     "pillow",

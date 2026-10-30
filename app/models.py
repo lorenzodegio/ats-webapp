@@ -17,7 +17,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     Column, String, Integer, BigInteger, Boolean, DateTime, Date,
-    Numeric, Text, JSON, Enum, ForeignKey
+    Numeric, Text, JSON, Enum, ForeignKey, Float
 )
 from sqlalchemy.orm import relationship
 
@@ -79,6 +79,84 @@ class Farmacia(Base):
 
     def __repr__(self) -> str:
         return f"<Farmacia {self.codice} — {self.nome}>"
+
+
+class ProfiloLayoutEtichetta(Base):
+    """
+    Profilo di layout etichetta per una farmacia (pagina Impostazioni ->
+    "Prompt farmacie"): dove si trova l'etichetta sulla pagina e dove si
+    trovano i singoli campi da leggere, definiti dall'operatore disegnando
+    rettangoli su un PDF di esempio invece che affidarsi al confronto SSIM
+    automatico (vedi profilo_layout_etichetta.py, letto dalla pipeline OCR
+    tramite il JSON esportato in dati/profili_layout.json — stesso
+    meccanismo gia' usato per farmacie.json).
+
+    Le coordinate dei rettangoli sono relative alla pagina intera (0.0-1.0),
+    indipendenti dalla risoluzione con cui il PDF e' stato renderizzato.
+    """
+    __tablename__ = "profili_layout_etichetta"
+
+    id = Column(GUID, primary_key=True, default=genera_uuid)
+    farmacia_id = Column(GUID, ForeignKey("farmacie.id"), nullable=False, unique=True, index=True)
+
+    # Punto 1 (rilevamento presenza etichetta): parole-guida specifiche di
+    # questa farmacia. None = non configurato (il rilevamento ricade sui
+    # pattern generici); vedi distinzione None/lista-vuota in
+    # profilo_layout_etichetta.ProfiloLayoutEtichetta.
+    parole_guida_presenza = Column(JSON, nullable=True)
+
+    # Area generale dell'etichetta sulla pagina, disegnata dall'operatore.
+    # Tutti e 4 nulli insieme = non ancora disegnata.
+    rettangolo_etichetta_x1 = Column(Float, nullable=True)
+    rettangolo_etichetta_y1 = Column(Float, nullable=True)
+    rettangolo_etichetta_x2 = Column(Float, nullable=True)
+    rettangolo_etichetta_y2 = Column(Float, nullable=True)
+
+    # PDF di esempio caricato dall'operatore per disegnare i rettangoli —
+    # percorso relativo sotto uploads/, stesso principio "SharePoint e'
+    # il filesystem" del resto dello schema (qui locale, non su SharePoint,
+    # e' solo materiale di riferimento per la configurazione).
+    pdf_esempio_path = Column(String(500), nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    farmacia = relationship("Farmacia")
+    campi = relationship(
+        "CampoProfiloLayout", back_populates="profilo",
+        cascade="all, delete-orphan", order_by="CampoProfiloLayout.ordine",
+    )
+
+    def __repr__(self) -> str:
+        return f"<ProfiloLayoutEtichetta farmacia_id={self.farmacia_id}>"
+
+
+class CampoProfiloLayout(Base):
+    """
+    Un campo da leggere all'interno di un ProfiloLayoutEtichetta (es.
+    data_etichetta_preparazione). Deve avere almeno un rettangolo
+    (Modo B, ripiego disegnato a mano) — parola_guida e' opzionale
+    (Modo A, tentato per primo se presente): stessa regola di
+    profilo_layout_etichetta.CampoEtichettaConfig.
+    """
+    __tablename__ = "campi_profilo_layout"
+
+    id = Column(GUID, primary_key=True, default=genera_uuid)
+    profilo_id = Column(GUID, ForeignKey("profili_layout_etichetta.id"), nullable=False, index=True)
+    ordine = Column(Integer, default=0, nullable=False)
+
+    nome_campo = Column(String(100), nullable=False)
+    parola_guida = Column(String(200), nullable=True)
+
+    rettangolo_x1 = Column(Float, nullable=True)
+    rettangolo_y1 = Column(Float, nullable=True)
+    rettangolo_x2 = Column(Float, nullable=True)
+    rettangolo_y2 = Column(Float, nullable=True)
+
+    profilo = relationship("ProfiloLayoutEtichetta", back_populates="campi")
+
+    def __repr__(self) -> str:
+        return f"<CampoProfiloLayout {self.nome_campo}>"
 
 
 # ============================================================

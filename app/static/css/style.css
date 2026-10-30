@@ -1034,3 +1034,76 @@ a.wizard-step--attivo .wizard-step__numero {
   .split-revisione { grid-template-columns: 1fr; }
   .split-revisione__iframe { height: 50vh; }
 }
+
+/* Prompt farmacie: disegno rettangoli (area etichetta + campi) su anteprima PDF */
+.anteprima-etichetta-wrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-control);
+  cursor: crosshair;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.anteprima-etichetta-wrap--disegno {
+  outline: 3px solid var(--terracotta);
+  outline-offset: 2px;
+}
+.anteprima-etichetta-wrap img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  -webkit-user-drag: none;
+  user-drag: none;
+  pointer-events: none; /* evita che il browser avvii un trascinamento nativo dell'immagine */
+}
+.anteprima-etichetta-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.rett-overlay {
+  position: absolute;
+  border: 3px solid var(--sage);
+  background: rgba(107, 144, 128, 0.22);
+  box-sizing: border-box;
+}
+.rett-overlay--etichetta {
+  border-color: var(--sage-light);
+  border-style: dashed;
+  background: rgba(164, 195, 178, 0.15);
+}
+.rett-overlay__etichetta {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  font-weight: 600;
+  color: #fff;
+  padding: 2px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.4);
+}
+.banner-modalita-disegno {
+  background: var(--terracotta);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: var(--radius-control);
+  margin-bottom: 12px;
+}
+.riga-campo-profilo {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-control);
+  padding: 12px;
+  margin-bottom: 12px;
+}
+.riga-campo-profilo.riga-campo-profilo--attiva {
+  border-color: var(--terracotta);
+  box-shadow: 0 0 0 1px var(--terracotta);
+}
+.riga-campo-profilo .griglia-form { margin-bottom: 8px; }
