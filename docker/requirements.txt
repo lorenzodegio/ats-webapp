@@ -1,4 +1,4 @@
-PyMuPDF
+PyMuPDF<2.0
 opencv-python-headless
 numpy
 pillow

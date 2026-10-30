@@ -134,7 +134,7 @@ def fase_excel():
     excel_regione = next((DATI / "excel_regione").glob("*.xlsx"), None)
 
     if excel_regione is None:
-        print("ERRORE: nessun file Regione trovato in /dati/excel_regione")
+        print(f"ERRORE: nessun file Regione trovato in {DATI / 'excel_regione'}")
         sys.exit(1)
 
     ok = pipeline.esegui_scrittura_excel(excel_regione, output_dir, template_path, ricette_dir)
