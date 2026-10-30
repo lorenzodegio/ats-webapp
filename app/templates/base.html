@@ -4,27 +4,27 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block titolo %}ATS Gestione Prescrizioni Cannabis{% endblock %}</title>
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="{{ ROOT_PATH }}/static/css/style.css">
 </head>
 <body>
   <div class="layout">
     <aside class="sidebar">
       <div class="sidebar__brand">ATS Gestione Prescrizioni Cannabis</div>
       <nav class="sidebar__nav">
-        <a href="/" class="sidebar__link {% if voce_attiva == 'dashboard' %}sidebar__link--attivo{% endif %}">
+        <a href="{{ ROOT_PATH }}/" class="sidebar__link {% if voce_attiva == 'dashboard' %}sidebar__link--attivo{% endif %}">
           <span class="sidebar__icon">&#9702;</span> Dashboard
         </a>
-        <a href="/lotti/nuovo" class="sidebar__link {% if voce_attiva == 'nuova' %}sidebar__link--attivo{% endif %}">
+        <a href="{{ ROOT_PATH }}/lotti/nuovo" class="sidebar__link {% if voce_attiva == 'nuova' %}sidebar__link--attivo{% endif %}">
           <span class="sidebar__icon">+</span> Nuovo lotto
         </a>
-        <a href="/lotti" class="sidebar__link {% if voce_attiva == 'elaborazioni' %}sidebar__link--attivo{% endif %}">
+        <a href="{{ ROOT_PATH }}/lotti" class="sidebar__link {% if voce_attiva == 'elaborazioni' %}sidebar__link--attivo{% endif %}">
           <span class="sidebar__icon">&#9679;</span> Lotti recenti
         </a>
-        <a href="/archivio" class="sidebar__link {% if voce_attiva == 'archivio' %}sidebar__link--attivo{% endif %}">
+        <a href="{{ ROOT_PATH }}/archivio" class="sidebar__link {% if voce_attiva == 'archivio' %}sidebar__link--attivo{% endif %}">
           <span class="sidebar__icon">&#9776;</span> Archivio
         </a>
         {% if utente and utente.is_admin %}
-        <a href="/impostazioni" class="sidebar__link {% if voce_attiva == 'impostazioni' %}sidebar__link--attivo{% endif %}">
+        <a href="{{ ROOT_PATH }}/impostazioni" class="sidebar__link {% if voce_attiva == 'impostazioni' %}sidebar__link--attivo{% endif %}">
           <span class="sidebar__icon">&#9881;</span> Impostazioni
         </a>
         {% endif %}
@@ -40,7 +40,7 @@
             </span>
             <span class="sidebar-user__chevron" aria-hidden="true"></span>
           </summary>
-          <a class="sidebar-user__logout" href="/logout">Esci e cambia utente</a>
+          <a class="sidebar-user__logout" href="{{ ROOT_PATH }}/logout">Esci e cambia utente</a>
         </details>
       </div>
       {% endif %}
@@ -51,7 +51,8 @@
     </main>
   </div>
 
-  <script src="/static/js/app.js"></script>
+  <script>window.ROOT_PATH = "{{ ROOT_PATH }}";</script>
+  <script src="{{ ROOT_PATH }}/static/js/app.js"></script>
   {% block script %}{% endblock %}
 </body>
 </html>

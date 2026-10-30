@@ -15,7 +15,7 @@
     {% for voce in lotti_attivi_vista %}
     <div class="job-attivo-riga" data-lotto-id="{{ voce.lotto.id }}">
       <div class="job-attivo-riga__testa">
-        <a href="/lotti/{{ voce.lotto.id }}" class="job-attivo-riga__nome">{{ voce.lotto.nome }}</a>
+        <a href="{{ ROOT_PATH }}/lotti/{{ voce.lotto.id }}" class="job-attivo-riga__nome">{{ voce.lotto.nome }}</a>
         <span class="job-attivo-riga__fase" id="fase-{{ voce.lotto.id }}">{{ voce.etichetta_stato }}{% if voce.messaggio_operatore %} · {{ voce.messaggio_operatore }}{% endif %}</span>
       </div>
       <div class="barra-progresso-riga">
@@ -28,14 +28,14 @@
     </div>
     {% endfor %}
   {% else %}
-    <div class="stato-vuoto">Nessun lotto in lavorazione al momento. <a href="/lotti/nuovo" style="color: var(--sage); font-weight:600;">Creane uno &rarr;</a></div>
+    <div class="stato-vuoto">Nessun lotto in lavorazione al momento. <a href="{{ ROOT_PATH }}/lotti/nuovo" style="color: var(--sage); font-weight:600;">Creane uno &rarr;</a></div>
   {% endif %}
 </div>
 
 <div class="card">
   <h2 class="card__titolo">Panoramica generale</h2>
 
-  <form method="get" action="/" class="filtri-riga filtri-riga--dashboard">
+  <form method="get" action="{{ ROOT_PATH }}/" class="filtri-riga filtri-riga--dashboard">
     <div class="campo campo--filtro">
       <label>Anno</label>
       <select name="anno">
@@ -65,7 +65,7 @@
     </div>
     <button type="submit" class="btn btn--secondario">Filtra</button>
     {% if filtro_anno or filtro_mese or filtro_stato %}
-    <a href="/" class="btn btn--secondario">Azzera</a>
+    <a href="{{ ROOT_PATH }}/" class="btn btn--secondario">Azzera</a>
     {% endif %}
   </form>
 
@@ -102,5 +102,5 @@
 {% endblock %}
 
 {% block script %}
-<script src="/static/js/dashboard-progresso.js"></script>
+<script src="{{ ROOT_PATH }}/static/js/dashboard-progresso.js"></script>
 {% endblock %}

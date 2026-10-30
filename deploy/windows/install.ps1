@@ -254,6 +254,7 @@ $envXml
 
 $rootPath = Get-DotEnvValue -Chiave "ROOT_PATH" -Default ""
 $argRootPath = if ($rootPath) { " --root-path $rootPath" } else { "" }
+$appPort = Get-DotEnvValue -Chiave "APP_PORT" -Default "8000"
 
 $xmlOllama = Format-WinswXml -Id $ServiceOllama -Nome "ATS Ollama" `
     -Descrizione "Ollama (Qwen3-VL) per la pipeline OCR ATS Insubria" `
@@ -270,7 +271,7 @@ Set-Content -Path (Join-Path $WinswRoot "$ServiceOllama.xml") -Value $xmlOllama 
 $xmlWebapp = Format-WinswXml -Id $ServiceWebapp -Nome "ATS Webapp" `
     -Descrizione "ATS Insubria - Gestione Prescrizioni Cannabis (FastAPI)" `
     -Eseguibile $webappPython `
-    -Argomenti "-m uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1$argRootPath" `
+    -Argomenti "-m uvicorn app.main:app --host 127.0.0.1 --port $appPort --proxy-headers --forwarded-allow-ips=127.0.0.1$argRootPath" `
     -CartellaLavoro $RepoRoot `
     -Dipendenze @($ServiceOllama, "postgresql-x64-16")
 Set-Content -Path (Join-Path $WinswRoot "$ServiceWebapp.xml") -Value $xmlWebapp -Encoding UTF8

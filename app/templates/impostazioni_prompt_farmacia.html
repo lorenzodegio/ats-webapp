@@ -7,7 +7,7 @@
     <h1>Prompt farmacie — {{ farmacia.nome }}</h1>
     <div class="sottotitolo">Dove si trova l'etichetta e dove si trovano i campi da leggere, disegnati su una ricetta di esempio</div>
   </div>
-  <a href="/impostazioni?tab=prompt_farmacie" class="btn btn--secondario">&larr; Torna all'elenco</a>
+  <a href="{{ ROOT_PATH }}/impostazioni?tab=prompt_farmacie" class="btn btn--secondario">&larr; Torna all'elenco</a>
 </div>
 
 {% if errore %}
@@ -22,7 +22,7 @@
   <p style="font-size:13px; color: var(--text-secondary); margin-top:-8px;">
     Una ricetta reale di questa farmacia, usata solo per disegnare i rettangoli — non viene elaborata.
   </p>
-  <form method="post" action="/impostazioni/prompt-farmacie/{{ farmacia.id }}/carica-esempio" enctype="multipart/form-data">
+  <form method="post" action="{{ ROOT_PATH }}/impostazioni/prompt-farmacie/{{ farmacia.id }}/carica-esempio" enctype="multipart/form-data">
     <div class="filtri-riga">
       <input type="file" name="file_pdf" accept="application/pdf" required>
       <button type="submit" class="btn btn--secondario">{{ 'Sostituisci PDF di esempio' if ha_anteprima else 'Carica PDF di esempio' }}</button>
@@ -31,7 +31,7 @@
 </div>
 
 {% if ha_anteprima %}
-<form method="post" action="/impostazioni/prompt-farmacie/{{ farmacia.id }}/salva" id="form-prompt-farmacia">
+<form method="post" action="{{ ROOT_PATH }}/impostazioni/prompt-farmacie/{{ farmacia.id }}/salva" id="form-prompt-farmacia">
   <div class="card">
     <h2 class="card__titolo">Rilevamento presenza etichetta</h2>
     <div class="campo">
@@ -64,7 +64,7 @@
     </div>
 
     <div id="anteprima-wrap" class="anteprima-etichetta-wrap">
-      <img id="anteprima-img" src="/impostazioni/prompt-farmacie/{{ farmacia.id }}/anteprima.png" alt="Anteprima ricetta" draggable="false">
+      <img id="anteprima-img" src="{{ ROOT_PATH }}/impostazioni/prompt-farmacie/{{ farmacia.id }}/anteprima.png" alt="Anteprima ricetta" draggable="false">
       <div id="anteprima-overlay" class="anteprima-etichetta-overlay"></div>
     </div>
 
@@ -86,7 +86,7 @@
 </form>
 
 {% if profilo %}
-<form method="post" action="/impostazioni/prompt-farmacie/{{ farmacia.id }}/elimina"
+<form method="post" action="{{ ROOT_PATH }}/impostazioni/prompt-farmacie/{{ farmacia.id }}/elimina"
       onsubmit="return confirm('Eliminare il profilo di questa farmacia? La pipeline tornera\' al comportamento generico.');">
   <button type="submit" class="btn btn--secondario" style="margin-top:8px;">Elimina profilo</button>
 </form>
@@ -127,6 +127,6 @@
 
 {% block script %}
 {% if ha_anteprima %}
-<script src="/static/js/prompt-farmacie.js"></script>
+<script src="{{ ROOT_PATH }}/static/js/prompt-farmacie.js"></script>
 {% endif %}
 {% endblock %}

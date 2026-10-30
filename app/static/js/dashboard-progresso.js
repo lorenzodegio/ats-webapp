@@ -14,7 +14,7 @@
     await Promise.all(
       righe.map(async (riga) => {
         try {
-          const risposta = await fetch(`/lotti/${riga.dataset.lottoId}/stato`);
+          const risposta = await fetch(`${window.ROOT_PATH || ""}/lotti/${riga.dataset.lottoId}/stato`);
           if (!risposta.ok) return;
           const dati = await risposta.json();
 

@@ -7,7 +7,7 @@
     <h1>Lotti recenti</h1>
     <div class="sottotitolo">Gli ultimi {{ numero_recenti }} lotti mensili. Clicca su una riga per aprirne il dettaglio.</div>
   </div>
-  <a href="/lotti/nuovo" class="btn btn--primario">+ Nuovo lotto</a>
+  <a href="{{ ROOT_PATH }}/lotti/nuovo" class="btn btn--primario">+ Nuovo lotto</a>
 </div>
 
 <div class="card">
@@ -37,7 +37,7 @@
     </tbody>
   </table>
   {% else %}
-  <div class="stato-vuoto">Nessun lotto ancora creato. <a href="/lotti/nuovo" style="color: var(--sage); font-weight:600;">Creane uno &rarr;</a></div>
+  <div class="stato-vuoto">Nessun lotto ancora creato. <a href="{{ ROOT_PATH }}/lotti/nuovo" style="color: var(--sage); font-weight:600;">Creane uno &rarr;</a></div>
   {% endif %}
 </div>
 {% endblock %}

@@ -14,8 +14,7 @@ from pathlib import Path
 from typing import List
 
 from fastapi import APIRouter, Request, Depends, Form, UploadFile, File, BackgroundTasks
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse, Response
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
@@ -48,9 +47,10 @@ from app.progresso import (
     estrai_progresso_da_log, messaggio_fase_operatore,
     indice_fase_wizard, FASI_WIZARD_LOTTO, formatta_log_righe, formatta_ora_locale,
 )
+from app.root_path import RedirectResponse, crea_templates
 
 router = APIRouter(tags=["lotti"])
-templates = Jinja2Templates(directory="app/templates")
+templates = crea_templates()
 templates.env.filters["ora_locale"] = formatta_ora_locale
 
 UPLOAD_DIR_TEMP = "uploads"

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Registrati — ATS Gestione Prescrizioni Cannabis</title>
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="{{ ROOT_PATH }}/static/css/style.css">
 </head>
 <body>
   <div class="login-wrapper">
@@ -16,7 +16,7 @@
       <div class="errore-form">{{ errore }}</div>
       {% endif %}
 
-      <form method="post" action="/register">
+      <form method="post" action="{{ ROOT_PATH }}/register">
         <div class="campo">
           <label for="nome">Nome e cognome</label>
           <input type="text" id="nome" name="nome" value="{{ nome or '' }}" required autofocus>
@@ -51,10 +51,10 @@
       </form>
 
       <p style="text-align:center; margin-top:16px; font-size:13px;">
-        Hai già un account? <a href="/login">Accedi</a>
+        Hai già un account? <a href="{{ ROOT_PATH }}/login">Accedi</a>
       </p>
     </div>
   </div>
-  <script src="/static/js/password-toggle.js"></script>
+  <script src="{{ ROOT_PATH }}/static/js/password-toggle.js"></script>
 </body>
 </html>

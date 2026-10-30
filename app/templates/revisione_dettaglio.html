@@ -8,7 +8,7 @@
 {% include "_wizard_fasi_lotto.html" %}
 
 <div class="breadcrumb-revisione">
-  <a href="/lotti/{{ lotto.id }}">&larr; Torna a {{ lotto.nome }}</a>
+  <a href="{{ ROOT_PATH }}/lotti/{{ lotto.id }}">&larr; Torna a {{ lotto.nome }}</a>
   <span class="breadcrumb-revisione__sep">/</span>
   <span>
     {% if modo == 'barcode' %}Preprocessing
@@ -30,10 +30,10 @@
     <h2 class="card__titolo">{% if tipo_anteprima == 'pdf' %}PDF originale{% else %}Pagina originale{% endif %}</h2>
     {% if tipo_anteprima == 'pdf' %}
     <iframe class="split-revisione__iframe" title="PDF prescrizione"
-            src="/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/pdf#view=FitH"></iframe>
+            src="{{ ROOT_PATH }}/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/pdf#view=FitH"></iframe>
     {% elif tipo_anteprima in ('png', 'jpeg') %}
     <img class="split-revisione__iframe split-revisione__img" alt="Pagina prescrizione"
-         src="/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/pdf">
+         src="{{ ROOT_PATH }}/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/pdf">
     {% else %}
     <p class="stato-vuoto">PDF non disponibile.</p>
     {% endif %}
@@ -45,13 +45,13 @@
     <p style="font-size:13px; color:var(--text-secondary); margin-top:-8px;">
       Se è il fronte di una prescrizione, inserisci il barcode. Se è un retro o un foglio senza codice, escludi la pagina: non andrà in OCR.
     </p>
-    <form method="post" action="/lotti/{{ lotto.id }}/barcode/{{ presc.id }}" style="display:flex; flex-direction:column; gap:10px;">
+    <form method="post" action="{{ ROOT_PATH }}/lotti/{{ lotto.id }}/barcode/{{ presc.id }}" style="display:flex; flex-direction:column; gap:10px;">
       <label for="nuovo_barcode">Barcode corretto</label>
       <input id="nuovo_barcode" type="text" name="nuovo_barcode" placeholder="Barcode" required
              style="padding:10px 12px; border:1px solid var(--border-color); border-radius:8px;">
       <button type="submit" class="btn btn--primario">Salva barcode e torna all'elenco</button>
     </form>
-    <form method="post" action="/lotti/{{ lotto.id }}/barcode/{{ presc.id }}/escludi" style="margin-top:12px;"
+    <form method="post" action="{{ ROOT_PATH }}/lotti/{{ lotto.id }}/barcode/{{ presc.id }}/escludi" style="margin-top:12px;"
           onsubmit="return confirm('Escludere questa pagina? Non verrà elaborata in OCR.');">
       <button type="submit" class="btn btn--secondario">Escludi: non è un fronte di prescrizione</button>
     </form>
@@ -62,7 +62,7 @@
       Score OCR: {{ presc.score_ocr or '—' }}. Modifica e conferma per tornare all'elenco della fase OCR.
     </p>
     {% if presc.dati_ocr %}
-    <form method="post" action="/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/ocr" class="form-ocr-split">
+    <form method="post" action="{{ ROOT_PATH }}/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/ocr" class="form-ocr-split">
       <input type="hidden" name="torna_elenco" value="1">
       {% for campo, etichetta in etichette_ocr.items() %}
       {% set val = valori_ocr.get(campo, '') %}
@@ -126,11 +126,11 @@
             {% endif %}
           </td>
           <td style="display:flex; gap:8px;">
-            <form method="post" action="/lotti/{{ lotto.id }}/difformita/{{ d.id }}/conferma">
+            <form method="post" action="{{ ROOT_PATH }}/lotti/{{ lotto.id }}/difformita/{{ d.id }}/conferma">
               <input type="hidden" name="next" value="/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/revisione-difformita">
               <button type="submit" class="btn btn--secondario">Conferma</button>
             </form>
-            <form method="post" action="/lotti/{{ lotto.id }}/difformita/{{ d.id }}/escludi">
+            <form method="post" action="{{ ROOT_PATH }}/lotti/{{ lotto.id }}/difformita/{{ d.id }}/escludi">
               <input type="hidden" name="next" value="/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/revisione-difformita">
               <button type="submit" class="btn btn--secondario">Escludi</button>
             </form>
@@ -147,7 +147,7 @@
       {% if presc.pubblicata_cfa_at %}
       <div class="ok-form" style="margin:0;">Prescrizione già in cartella CFA.</div>
       {% else %}
-      <form method="post" action="/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/cfa">
+      <form method="post" action="{{ ROOT_PATH }}/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/cfa">
         <input type="hidden" name="next" value="/lotti/{{ lotto.id }}/prescrizioni/{{ presc.id }}/revisione-difformita">
         <button type="submit" class="btn btn--pericolo" title="Copia il PDF di questa prescrizione nella cartella CFA su SharePoint">CFA</button>
       </form>
@@ -155,9 +155,9 @@
     </div>
 
     <div style="display:flex; gap:10px; margin-top:16px; padding-top:16px; border-top:1px solid var(--border-color);">
-      <a class="btn btn--secondario" href="/lotti/{{ lotto.id }}?fase=5#revisione-difformita">&larr; Torna al menu</a>
+      <a class="btn btn--secondario" href="{{ ROOT_PATH }}/lotti/{{ lotto.id }}?fase=5#revisione-difformita">&larr; Torna al menu</a>
       {% if prescrizione_successiva %}
-      <a class="btn btn--primario" href="/lotti/{{ lotto.id }}/prescrizioni/{{ prescrizione_successiva.id }}/revisione-difformita">Prescrizione successiva &rarr;</a>
+      <a class="btn btn--primario" href="{{ ROOT_PATH }}/lotti/{{ lotto.id }}/prescrizioni/{{ prescrizione_successiva.id }}/revisione-difformita">Prescrizione successiva &rarr;</a>
       {% else %}
       <button type="button" class="btn btn--primario" disabled title="Nessun'altra prescrizione da gestire in questo lotto">Prescrizione successiva &rarr;</button>
       {% endif %}
@@ -169,5 +169,5 @@
 {% endblock %}
 
 {% block script %}
-<script src="/static/js/polling-lotto-detail.js"></script>
+<script src="{{ ROOT_PATH }}/static/js/polling-lotto-detail.js"></script>
 {% endblock %}

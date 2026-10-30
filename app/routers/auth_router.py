@@ -2,16 +2,16 @@
 from typing import Optional
 
 from fastapi import APIRouter, Request, Depends, Form
-from fastapi.responses import RedirectResponse, HTMLResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import RuoloUtente, Utente
 from app.auth import hash_password, verifica_password, get_utente_opzionale
+from app.root_path import RedirectResponse, crea_templates
 
 router = APIRouter(tags=["auth"])
-templates = Jinja2Templates(directory="app/templates")
+templates = crea_templates()
 
 
 @router.get("/login", response_class=HTMLResponse)

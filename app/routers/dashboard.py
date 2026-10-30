@@ -11,16 +11,16 @@ from typing import Optional
 
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.auth import get_utente_corrente
 from app.models import LottoMensile, StatoLotto, Prescrizione, Difformita, StatoDifformita, Utente
 from app.progresso import percentuale_avanzamento, etichetta_stato, messaggio_fase_operatore, estrai_progresso_da_log
+from app.root_path import crea_templates
 
 router = APIRouter(tags=["dashboard"])
-templates = Jinja2Templates(directory="app/templates")
+templates = crea_templates()
 
 STATI_CONCLUSI = [StatoLotto.completato, StatoLotto.archiviato]
 

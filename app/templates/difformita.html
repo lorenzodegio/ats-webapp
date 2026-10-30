@@ -10,14 +10,14 @@
 </div>
 
 <div class="card">
-  <form method="get" action="/difformita" class="filtri-riga">
+  <form method="get" action="{{ ROOT_PATH }}/difformita" class="filtri-riga">
     <select name="tipo" onchange="this.form.submit()">
       <option value="">Tutti i tipi</option>
       {% for t in tipi_disponibili %}
       <option value="{{ t }}" {% if t == tipo_selezionato %}selected{% endif %}>{{ t }}</option>
       {% endfor %}
     </select>
-    {% if tipo_selezionato %}<a href="/difformita" class="btn btn--secondario">Azzera</a>{% endif %}
+    {% if tipo_selezionato %}<a href="{{ ROOT_PATH }}/difformita" class="btn btn--secondario">Azzera</a>{% endif %}
   </form>
 
   {% if difformita_list %}

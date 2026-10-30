@@ -27,7 +27,8 @@ if ($pgSvc) {
 
 Write-Step "/health"
 try {
-    $risposta = Invoke-WebRequest -Uri "http://127.0.0.1:8000/health" -UseBasicParsing -TimeoutSec 5
+    $porta = Get-DotEnvValue -Chiave "APP_PORT" -Default "8000"
+    $risposta = Invoke-WebRequest -Uri "http://127.0.0.1:$porta/health" -UseBasicParsing -TimeoutSec 5
     Write-Host "    HTTP $($risposta.StatusCode)  -  $($risposta.Content)" -ForegroundColor Green
 } catch {
     Write-Host "    Non raggiungibile: $($_.Exception.Message)" -ForegroundColor Red

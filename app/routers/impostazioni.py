@@ -8,17 +8,17 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Form, Request, UploadFile, File
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from sqlalchemy.orm import Session, joinedload
 
 from app.auth import get_utente_corrente
 from app.database import get_db
 from app.models import CampoProfiloLayout, Configurazione, DatiOcr, Farmacia, ProfiloLayoutEtichetta, Utente
 from app.storage import cartella_profilo_layout
+from app.root_path import RedirectResponse, crea_templates
 
 router = APIRouter(tags=["impostazioni"])
-templates = Jinja2Templates(directory="app/templates")
+templates = crea_templates()
 log = logging.getLogger(__name__)
 
 

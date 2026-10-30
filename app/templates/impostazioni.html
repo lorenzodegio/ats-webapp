@@ -17,16 +17,16 @@
 {% endif %}
 
 <div class="tab-bar" role="tablist">
-  <a href="/impostazioni?tab=farmacie" class="tab-bar__voce {% if tab == 'farmacie' %}tab-bar__voce--attivo{% endif %}">Farmacie</a>
-  <a href="/impostazioni?tab=sistema" class="tab-bar__voce {% if tab == 'sistema' %}tab-bar__voce--attivo{% endif %}">Sistema</a>
-  <a href="/impostazioni?tab=prompt_farmacie" class="tab-bar__voce {% if tab == 'prompt_farmacie' %}tab-bar__voce--attivo{% endif %}">Prompt farmacie</a>
+  <a href="{{ ROOT_PATH }}/impostazioni?tab=farmacie" class="tab-bar__voce {% if tab == 'farmacie' %}tab-bar__voce--attivo{% endif %}">Farmacie</a>
+  <a href="{{ ROOT_PATH }}/impostazioni?tab=sistema" class="tab-bar__voce {% if tab == 'sistema' %}tab-bar__voce--attivo{% endif %}">Sistema</a>
+  <a href="{{ ROOT_PATH }}/impostazioni?tab=prompt_farmacie" class="tab-bar__voce {% if tab == 'prompt_farmacie' %}tab-bar__voce--attivo{% endif %}">Prompt farmacie</a>
 </div>
 
 {% if tab == 'farmacie' %}
 {% if farmacia_in_modifica %}
 <div class="card">
   <h2 class="card__titolo">Modifica farmacia {{ farmacia_in_modifica.codice }}</h2>
-  <form method="post" action="/impostazioni/farmacie/{{ farmacia_in_modifica.id }}/modifica">
+  <form method="post" action="{{ ROOT_PATH }}/impostazioni/farmacie/{{ farmacia_in_modifica.id }}/modifica">
     <div class="griglia-form">
       <div class="campo">
         <label for="codice">Codice identificativo univoco *</label>
@@ -70,7 +70,7 @@
     </div>
     <div class="filtri-riga">
       <button type="submit" class="btn btn--primario">Salva modifiche</button>
-      <a href="/impostazioni" class="btn btn--secondario">Annulla</a>
+      <a href="{{ ROOT_PATH }}/impostazioni" class="btn btn--secondario">Annulla</a>
     </div>
   </form>
 </div>
@@ -79,7 +79,7 @@
 <div class="card">
   <div class="card__titolo" style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
     <span>Anagrafica Farmacie <span class="card__titolo-contatore">({{ farmacie | length }})</span></span>
-    <a href="/impostazioni/farmacie/export-csv" class="btn btn--secondario">Scarica CSV</a>
+    <a href="{{ ROOT_PATH }}/impostazioni/farmacie/export-csv" class="btn btn--secondario">Scarica CSV</a>
   </div>
   {% if farmacie %}
   <table class="tabella">
@@ -119,13 +119,13 @@
         </td>
         <td>
           <div class="filtri-riga" style="justify-content:flex-end;">
-            <a href="/impostazioni/farmacie/{{ f.id }}/modifica" class="btn btn--secondario" style="padding:6px 10px; font-size:12px;">Modifica</a>
+            <a href="{{ ROOT_PATH }}/impostazioni/farmacie/{{ f.id }}/modifica" class="btn btn--secondario" style="padding:6px 10px; font-size:12px;">Modifica</a>
             {% if f.attiva %}
-            <form method="post" action="/impostazioni/farmacie/{{ f.id }}/disattiva">
+            <form method="post" action="{{ ROOT_PATH }}/impostazioni/farmacie/{{ f.id }}/disattiva">
               <button type="submit" class="btn btn--secondario" style="padding:6px 10px; font-size:12px;">Disattiva</button>
             </form>
             {% else %}
-            <form method="post" action="/impostazioni/farmacie/{{ f.id }}/riattiva">
+            <form method="post" action="{{ ROOT_PATH }}/impostazioni/farmacie/{{ f.id }}/riattiva">
               <button type="submit" class="btn btn--primario" style="padding:6px 10px; font-size:12px;">Riattiva</button>
             </form>
             {% endif %}
@@ -202,7 +202,7 @@
         </td>
         <td class="mono">{{ p.campi | length if p else 0 }}</td>
         <td>
-          <a href="/impostazioni/prompt-farmacie/{{ f.id }}" class="btn btn--secondario" style="padding:6px 10px; font-size:12px;">
+          <a href="{{ ROOT_PATH }}/impostazioni/prompt-farmacie/{{ f.id }}" class="btn btn--secondario" style="padding:6px 10px; font-size:12px;">
             {{ 'Modifica' if p else 'Configura' }}
           </a>
         </td>

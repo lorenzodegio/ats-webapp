@@ -1,7 +1,6 @@
 """Router archivio: /archivio — storico prescrizioni ricercabile per barcode o nome lotto, raggruppato per lotto."""
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
@@ -9,9 +8,10 @@ from app.database import get_db
 from app.auth import get_utente_corrente
 from app.models import Prescrizione, LottoMensile, Utente, DatiOcr, Farmacia
 from app.progresso import formatta_ora_locale
+from app.root_path import crea_templates
 
 router = APIRouter(tags=["archivio"])
-templates = Jinja2Templates(directory="app/templates")
+templates = crea_templates()
 templates.env.filters["ora_locale"] = formatta_ora_locale
 
 LIMITE_PRESCRIZIONI = 500

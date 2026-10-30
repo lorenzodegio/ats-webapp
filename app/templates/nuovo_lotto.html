@@ -26,7 +26,7 @@
     un'elaborazione attiva, mettila in pausa o annullala dalla sua pagina) prima di
     crearne uno nuovo.
   </p>
-  <a href="/lotti/{{ lotto_bloccante.id }}" class="btn btn--primario">Vai al lotto in elaborazione</a>
+  <a href="{{ ROOT_PATH }}/lotti/{{ lotto_bloccante.id }}" class="btn btn--primario">Vai al lotto in elaborazione</a>
 </div>
 {% else %}
 
@@ -40,7 +40,7 @@
 </div>
 
 <div class="card">
-  <form id="form-wizard" method="post" action="/lotti/nuovo" enctype="multipart/form-data">
+  <form id="form-wizard" method="post" action="{{ ROOT_PATH }}/lotti/nuovo" enctype="multipart/form-data">
 
     <!-- Step 1: Dati lotto -->
     <div class="wizard-panel wizard-panel--attivo" data-step="1">
@@ -142,6 +142,6 @@
 
 {% block script %}
 {% if not lotto_bloccante %}
-<script src="/static/js/wizard-nuovo-lotto.js"></script>
+<script src="{{ ROOT_PATH }}/static/js/wizard-nuovo-lotto.js"></script>
 {% endif %}
 {% endblock %}

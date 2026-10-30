@@ -42,7 +42,7 @@ _log_pipeline.addHandler(_handler_console_pipeline)
 _log_pipeline.propagate = False
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import PlainTextResponse
@@ -51,6 +51,7 @@ from app.database import Base, engine, SessionLocal
 from app.config_helper import assicura_pipeline_reale
 from app.auth import RedirectLogin
 from app.real_pipeline import recupera_elaborazioni_orfane
+from app.root_path import RedirectResponse, ROOT_PATH
 from app.storage import verifica_storage_produzione, APP_ENV
 from app.routers import auth_router, dashboard, lotti, archivio, impostazioni
 
@@ -115,7 +116,7 @@ app.add_middleware(
 # garanzia assoluta contro un client che mente sulla dimensione, ma copre
 # il caso normale (upload PDF dal wizard) senza dover bufferizzare il
 # corpo per contarlo qui.
-MAX_UPLOAD_SIZE_BYTES = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "200")) * 1024 * 1024
+MAX_UPLOAD_SIZE_BYTES = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "500")) * 1024 * 1024
 
 
 @app.middleware("http")
@@ -123,13 +124,25 @@ async def _limita_dimensione_upload(request: Request, call_next):
     content_length = request.headers.get("content-length")
     if content_length is not None:
         try:
-            if int(content_length) > MAX_UPLOAD_SIZE_BYTES:
-                return PlainTextResponse(
-                    f"Corpo della richiesta troppo grande (limite {MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)} MB).",
-                    status_code=413,
-                )
+            troppo_grande = int(content_length) > MAX_UPLOAD_SIZE_BYTES
         except ValueError:
-            pass
+            troppo_grande = False
+        if troppo_grande:
+            limite_mb = MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)
+            # Il wizard di caricamento (POST /lotti/nuovo) ha gia' un modo
+            # per mostrare un errore chiaro sulla stessa pagina (lo stesso
+            # redirect "?errore=..." usato per le altre validazioni, vedi
+            # app/routers/lotti.py) — ci si appoggia a quello invece di un
+            # 413 testuale che butterebbe fuori l'operatore dal wizard.
+            if request.url.path == "/lotti/nuovo" and request.method == "POST":
+                return RedirectResponse(
+                    url=f"/lotti/nuovo?errore=File+troppo+grande+(limite+{limite_mb}+MB)",
+                    status_code=302,
+                )
+            return PlainTextResponse(
+                f"Corpo della richiesta troppo grande (limite {limite_mb} MB).",
+                status_code=413,
+            )
     return await call_next(request)
 
 
@@ -139,18 +152,52 @@ def health_check():
     Endpoint per WinSW (riavvio automatico in caso di errore) e per
     status.ps1 — verifica che l'app risponda E che il DB sia raggiungibile
     (un 200 che nasconde un DB giu' sarebbe inutile per un controllo di
-    salute). Nessun dato sensibile nella risposta.
+    salute). Nessun dato sensibile nella risposta (percorsi, credenziali):
+    solo ok/errore per componente.
+
+    Solo il DB giu' porta lo status HTTP a 503 (e quindi fa scattare il
+    riavvio automatico via WinSW): Ollama irraggiungibile o storage non
+    valido non significano che la webapp stessa sia rotta (login,
+    dashboard, archivio funzionano comunque), e riavviare la webapp non
+    risolverebbe ne' l'uno ne' l'altro — restano segnalati nella risposta
+    per status.ps1/un controllo manuale, senza innescare restart inutili.
     """
     from sqlalchemy import text
+
+    import requests
+
+    from app.storage import ErroreStorageNonValido, radice_sharepoint
+
+    componenti = {}
+
     try:
         db = SessionLocal()
         try:
             db.execute(text("SELECT 1"))
         finally:
             db.close()
-    except Exception as exc:
-        return JSONResponse({"status": "errore", "dettaglio": "database non raggiungibile"}, status_code=503)
-    return {"status": "ok"}
+        componenti["database"] = "ok"
+    except Exception:
+        componenti["database"] = "errore"
+
+    ollama_host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").strip()
+    try:
+        risposta = requests.get(ollama_host, timeout=3)
+        componenti["ollama"] = "ok" if risposta.status_code < 500 else "errore"
+    except Exception:
+        componenti["ollama"] = "errore"
+
+    try:
+        radice_sharepoint()
+        componenti["storage"] = "ok"
+    except ErroreStorageNonValido:
+        componenti["storage"] = "errore"
+    except Exception:
+        componenti["storage"] = "errore"
+
+    if componenti["database"] != "ok":
+        return JSONResponse({"status": "errore", "componenti": componenti}, status_code=503)
+    return {"status": "ok", "componenti": componenti}
 
 
 @app.middleware("http")

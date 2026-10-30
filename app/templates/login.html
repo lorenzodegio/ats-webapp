@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Accedi — ATS Gestione Prescrizioni Cannabis</title>
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="{{ ROOT_PATH }}/static/css/style.css">
 </head>
 <body>
   <div class="login-wrapper">
@@ -19,7 +19,7 @@
       <div class="ok-form">Account creato. Ora puoi accedere.</div>
       {% endif %}
 
-      <form method="post" action="/login">
+      <form method="post" action="{{ ROOT_PATH }}/login">
         <div class="campo">
           <label for="username">Nome utente</label>
           <input type="text" id="username" name="username" required autofocus>
@@ -38,10 +38,10 @@
       </form>
 
       <p style="text-align:center; margin-top:16px; font-size:13px;">
-        Non hai un account? <a href="/register">Registrati</a>
+        Non hai un account? <a href="{{ ROOT_PATH }}/register">Registrati</a>
       </p>
     </div>
   </div>
-  <script src="/static/js/password-toggle.js"></script>
+  <script src="{{ ROOT_PATH }}/static/js/password-toggle.js"></script>
 </body>
 </html>

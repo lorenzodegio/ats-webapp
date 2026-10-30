@@ -126,10 +126,16 @@ function Invoke-ServiceControl {
 }
 
 function Test-Health {
+    <# Interroga sempre /health direttamente su uvicorn (loopback), non
+       passando da IIS: ROOT_PATH riguarda solo come l'app genera i
+       propri link/redirect per il browser esterno, non il path interno
+       che uvicorn instrada -  /health resta "/health" anche con
+       ROOT_PATH impostata. #>
     param([int]$TentativiMax = 10, [int]$AttesaSecondi = 3)
+    $porta = Get-DotEnvValue -Chiave "APP_PORT" -Default "8000"
     for ($i = 1; $i -le $TentativiMax; $i++) {
         try {
-            $risposta = Invoke-WebRequest -Uri "http://127.0.0.1:8000/health" -UseBasicParsing -TimeoutSec 5
+            $risposta = Invoke-WebRequest -Uri "http://127.0.0.1:$porta/health" -UseBasicParsing -TimeoutSec 5
             if ($risposta.StatusCode -eq 200) { return $true }
         } catch {
             Write-Verbose "Tentativo $i/$TentativiMax su /health fallito: $($_.Exception.Message)"

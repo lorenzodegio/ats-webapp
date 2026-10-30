@@ -3,7 +3,7 @@
 <div class="wizard-steps wizard-steps--fasi" style="margin-bottom: 24px;">
   {% for num, etichetta in fasi_wizard %}
     {% if lotto is defined and num <= max_n %}
-    <a href="/lotti/{{ lotto.id }}?fase={{ num }}" class="wizard-step{% if num == n %} wizard-step--attivo{% elif num < max_n %} wizard-step--completato{% endif %}">
+    <a href="{{ ROOT_PATH }}/lotti/{{ lotto.id }}?fase={{ num }}" class="wizard-step{% if num == n %} wizard-step--attivo{% elif num < max_n %} wizard-step--completato{% endif %}">
       <span class="wizard-step__numero">{{ num }}</span>{{ etichetta }}
     </a>
     {% else %}

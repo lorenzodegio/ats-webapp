@@ -10,10 +10,10 @@
 </div>
 
 <div class="card">
-  <form method="get" action="/archivio" class="filtri-riga">
+  <form method="get" action="{{ ROOT_PATH }}/archivio" class="filtri-riga">
     <input type="search" name="q" value="{{ q }}" placeholder="Cerca per barcode, lotto, farmacia o Codice identificativo univoco…" style="min-width:340px; flex:1;">
     <button type="submit" class="btn btn--secondario">Cerca</button>
-    {% if q %}<a href="/archivio" class="btn btn--secondario">Azzera</a>{% endif %}
+    {% if q %}<a href="{{ ROOT_PATH }}/archivio" class="btn btn--secondario">Azzera</a>{% endif %}
   </form>
 </div>
 
@@ -32,7 +32,7 @@
 
     <div class="gruppo-lotto__corpo">
       {% if gruppo.lotto %}
-      <a href="/lotti/{{ gruppo.lotto.id }}" class="link-secondario">Apri il dettaglio completo del lotto →</a>
+      <a href="{{ ROOT_PATH }}/lotti/{{ gruppo.lotto.id }}" class="link-secondario">Apri il dettaglio completo del lotto →</a>
       {% endif %}
       <table class="tabella">
         <thead>
@@ -50,7 +50,7 @@
           <tr>
             <td class="mono">
               {% if p.barcode %}
-              <a href="/lotti/{{ gruppo.lotto.id }}/prescrizioni/{{ p.id }}/pdf" target="_blank" rel="noopener" class="link-barcode" title="Apri la prescrizione in una nuova scheda">{{ p.barcode }}<span class="link-barcode__icona" aria-hidden="true">↗</span></a>
+              <a href="{{ ROOT_PATH }}/lotti/{{ gruppo.lotto.id }}/prescrizioni/{{ p.id }}/pdf" target="_blank" rel="noopener" class="link-barcode" title="Apri la prescrizione in una nuova scheda">{{ p.barcode }}<span class="link-barcode__icona" aria-hidden="true">↗</span></a>
               {% else %}
               —
               {% endif %}

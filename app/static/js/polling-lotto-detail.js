@@ -31,7 +31,7 @@
 
     async function aggiorna() {
       try {
-        const risposta = await fetch(`/lotti/${lottoId}/stato`);
+        const risposta = await fetch(`${window.ROOT_PATH || ""}/lotti/${lottoId}/stato`);
         if (!risposta.ok) return;
         const dati = await risposta.json();
 
@@ -266,7 +266,7 @@
     document.body.style.overflow = "hidden";
 
     try {
-      const resp = await fetch(`/lotti/${lottoId}/prescrizioni/${prescrizioneId}/ocr`);
+      const resp = await fetch(`${window.ROOT_PATH || ""}/lotti/${lottoId}/prescrizioni/${prescrizioneId}/ocr`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const dati = await resp.json();
 
@@ -333,7 +333,7 @@
 
     try {
       const resp = await fetch(
-        `/lotti/${_lottoIdCorrente}/prescrizioni/${_prescrizioneIdCorrente}/ocr`,
+        `${window.ROOT_PATH || ""}/lotti/${_lottoIdCorrente}/prescrizioni/${_prescrizioneIdCorrente}/ocr`,
         { method: "POST", body: formData }
       );
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -366,11 +366,14 @@
     const btnAnnullaEtichetta = document.getElementById("btn-etichetta-mancante-annulla");
 
     window.apriModalEtichettaMancante = function (lottoId, prescrizioneId, azione) {
-      formEtichetta.action = `/lotti/${lottoId}/prescrizioni/${prescrizioneId}/etichetta-mancante/${azione}`;
+      formEtichetta.action = `${window.ROOT_PATH || ""}/lotti/${lottoId}/prescrizioni/${prescrizioneId}/etichetta-mancante/${azione}`;
       // Dall'elenco aggregato (lotto_detail.html) si torna li', con l'ancora
       // sulla sezione difformita'; dalla pagina dedicata di una singola
       // prescrizione si ricarica semplicemente quella stessa pagina.
-      nextEtichetta.value = window.location.pathname === `/lotti/${lottoId}`
+      // window.location.pathname e' gia' il percorso reale visto dal
+      // browser (con ROOT_PATH incluso, se presente): confrontarlo va
+      // fatto con lo stesso prefisso anteposto.
+      nextEtichetta.value = window.location.pathname === `${window.ROOT_PATH || ""}/lotti/${lottoId}`
         ? `${window.location.pathname}?fase=5#revisione-difformita`
         : window.location.pathname;
       if (azione === "conferma") {
