@@ -530,20 +530,33 @@ def _esegui_container_docker(nome_servizio: str, db: Session, elaborazione: Elab
 def _esegui_processo_locale(nome_servizio: str, db: Session, elaborazione: Elaborazione) -> None:
     """
     Runner nativo (PIPELINE_RUNNER=local, per un server senza Docker/WSL2):
-    lancia docker/run_fase.py con l'interprete Python dedicato alla
-    pipeline (PIPELINE_PYTHON — ambiente separato da quello della webapp,
-    ha torch/easyocr/ecc.), invece di un container Docker. E' lo stesso
-    identico script eseguito nei container Docker, qui lanciato come
-    processo nativo invece che in un'immagine — stesso comportamento per
-    fase, stesso parsing dell'output.
+    lancia LO STESSO docker/run_fase.py di questa repo (ats-webapp) con
+    l'interprete Python dedicato alla pipeline (PIPELINE_PYTHON — ambiente
+    separato da quello della webapp, ha torch/easyocr/ecc.), invece di un
+    container Docker. Stesso script, stesso comportamento per fase, stesso
+    parsing dell'output — solo il modo di lanciarlo cambia.
+
+    PIPELINE_DIR e' la cartella della repo SEPARATA ocr-cannabis-ats (vedi
+    CLAUDE.md) clonata sul server — contiene ocr_cannabis.py/pipeline.py/
+    ecc. e, qui dentro, OUTPUT_FLUSSO_CANNABIS_FINALE.xlsx. run_fase.py
+    invece resta dove vive sempre, dentro QUESTA repo (webapp): il percorso
+    dello script si calcola dalla posizione di questo file, non da
+    PIPELINE_DIR, altrimenti un server con solo la repo pipeline clonata
+    (senza il docker/ della webapp dentro) non troverebbe piu' lo script.
+    PIPELINE_DIR arriva comunque al processo figlio (via os.environ.copy()
+    sotto, dato che e' nell'ambiente della webapp stessa): run_fase.py lo
+    usa per mettere la cartella giusta in sys.path (vedi run_fase.py).
 
     I path assoluti /dati e /app/OUTPUT_FLUSSO_CANNABIS_FINALE.xlsx dentro
     run_fase.py sono sovrascrivibili da ATS_DATI_DIR/ATS_TEMPLATE_EXCEL
-    (vedi run_fase.py): qui passiamo la STESSA DATI_DIR della webapp — in
-    modalita' Docker serve il bind mount ./dati perche' il container ha un
-    filesystem isolato, qui invece webapp e pipeline girano sulla stessa
+    (vedi run_fase.py): ATS_DATI_DIR e' la STESSA DATI_DIR della webapp —
+    in modalita' Docker serve il bind mount ./dati perche' il container ha
+    un filesystem isolato, qui invece webapp e pipeline girano sulla stessa
     macchina e vedono direttamente la stessa cartella, senza bisogno di
-    nessun volume.
+    nessun volume. ATS_TEMPLATE_EXCEL invece vive nella repo PIPELINE (e'
+    un asset della pipeline, non della webapp — copiato nell'immagine
+    Docker dalla radice di questa repo solo perche' qui i due repo sono
+    vendorizzati insieme per comodita' di sviluppo, vedi Dockerfile).
 
     PYTHONUTF8/PYTHONIOENCODING forzati perche' la console di Windows Server
     di solito non e' UTF-8 di default (cp1252) — altrimenti caratteri
@@ -557,15 +570,16 @@ def _esegui_processo_locale(nome_servizio: str, db: Session, elaborazione: Elabo
             "alla pipeline)."
         )
 
-    script = Path(PIPELINE_DIR) / "docker" / "run_fase.py"
+    script = Path(__file__).resolve().parent.parent / "docker" / "run_fase.py"
     comando = [PIPELINE_PYTHON, str(script), nome_servizio]
     log.info(f"Eseguo: {' '.join(comando)}")
 
     ambiente = os.environ.copy()
     ambiente["PYTHONUTF8"] = "1"
     ambiente["PYTHONIOENCODING"] = "utf-8"
+    ambiente["PIPELINE_DIR"] = str(PIPELINE_DIR)
     ambiente["ATS_DATI_DIR"] = str(DATI_DIR)
-    ambiente["ATS_TEMPLATE_EXCEL"] = str(RADICE_PROGETTO / "OUTPUT_FLUSSO_CANNABIS_FINALE.xlsx")
+    ambiente["ATS_TEMPLATE_EXCEL"] = str(Path(PIPELINE_DIR) / "OUTPUT_FLUSSO_CANNABIS_FINALE.xlsx")
 
     processo = subprocess.Popen(
         comando, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

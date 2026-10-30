@@ -16,6 +16,7 @@ Modo B come ripiego se la parola-guida non viene trovata).
 """
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -123,7 +124,15 @@ REGISTRO_PROFILI_LAYOUT: Dict[str, ProfiloLayoutEtichetta] = {}
 # meccanismo gia' usato per farmacie.json (vedi farmacie_dizionario.py).
 # Se il file non c'e' (nessuna farmacia ancora profilata), il registro
 # resta vuoto: comportamento identico a prima di questa funzionalita'.
+# ATS_DATI_DIR (impostata da app/real_pipeline.py in modalita' nativa,
+# PIPELINE_RUNNER=local, server senza Docker) e' la cartella dati REALE
+# quando questo file vive in una repo separata da quella della webapp —
+# vedi la stessa logica in farmacie_dizionario.py. Controllata per prima.
+_ATS_DATI_DIR = os.environ.get("ATS_DATI_DIR", "").strip()
+
 PERCORSI_JSON_PROFILI = (
+    (Path(_ATS_DATI_DIR) / "profili_layout.json",) if _ATS_DATI_DIR else ()
+) + (
     Path("/dati/profili_layout.json"),
     Path("dati/profili_layout.json"),
     Path(__file__).resolve().parent / "dati" / "profili_layout.json",

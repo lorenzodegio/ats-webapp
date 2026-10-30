@@ -8,11 +8,22 @@ stesse farmacie storicamente hardcodate nei prompt.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+# ATS_DATI_DIR (impostata da app/real_pipeline.py in modalita' nativa,
+# PIPELINE_RUNNER=local) e' la cartella dati REALE quando questo file vive
+# in una repo separata da quella della webapp (vedi profilo_layout_etichetta.
+# py per lo stesso meccanismo) — senza, su un server Windows nessuno dei
+# percorsi sotto esisterebbe davvero (niente /dati assoluto, e il cwd non e'
+# garantito essere la cartella dati). Controllata per prima.
+_ATS_DATI_DIR = os.environ.get("ATS_DATI_DIR", "").strip()
+
 PERCORSI_JSON = (
+    (Path(_ATS_DATI_DIR) / "farmacie.json",) if _ATS_DATI_DIR else ()
+) + (
     Path("/dati/farmacie.json"),
     Path("dati/farmacie.json"),
     Path(__file__).resolve().parent / "dati" / "farmacie.json",

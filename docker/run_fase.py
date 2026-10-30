@@ -23,15 +23,22 @@ from pathlib import Path
 # Eseguito sia dentro un container Docker (dove questo file vive appiattito
 # in /app insieme a tutti gli altri script della pipeline, vedi docker/
 # Dockerfile) sia come processo nativo lanciato da app/real_pipeline.py
-# (PIPELINE_RUNNER=local, vedi _esegui_processo_locale) — in quel secondo
-# caso questo file resta dentro <PIPELINE_DIR>/docker/, separato dagli
-# altri moduli (phase1_preprocess.py, pipeline.py, ecc. restano alla radice
-# di PIPELINE_DIR). Python aggiunge solo la cartella DI QUESTO file a
-# sys.path, quindi senza questa riga "import pipeline" fallirebbe in
-# modalita' nativa. In un container questo path aggiuntivo punta a "/"
-# (inesistente/non rilevante) e non cambia nulla: gli import continuano a
-# risolversi tramite sys.path[0]="/app" come prima.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# (PIPELINE_RUNNER=local, vedi _esegui_processo_locale) — in entrambi i
+# casi e' lo stesso file, dentro la repo ats-webapp (docker/run_fase.py),
+# mentre gli altri moduli della pipeline (phase1_preprocess.py, pipeline.py,
+# ecc.) in produzione vivono nella repo SEPARATA ocr-cannabis-ats (vedi
+# CLAUDE.md), clonata altrove sul server — PIPELINE_DIR (env, passata dal
+# processo genitore) punta a quella cartella. Python aggiunge solo la
+# cartella DI QUESTO file a sys.path, quindi senza questa riga "import
+# pipeline" fallirebbe sempre in modalita' nativa. Se PIPELINE_DIR non e'
+# impostata (container Docker, o su questa macchina di sviluppo dove i due
+# repo sono vendorizzati insieme per comodita') si ricade sul vecchio
+# comportamento — genitore di questo file, cioe' la radice della repo
+# dove run_fase.py vive davvero: "/" dentro un container (ininfluente,
+# sys.path[0]="/app" risolve comunque tutto), la radice della repo stessa
+# qui in sviluppo.
+_pipeline_dir = os.environ.get("PIPELINE_DIR", "").strip()
+sys.path.insert(0, _pipeline_dir if _pipeline_dir else str(Path(__file__).resolve().parent.parent))
 
 # Configurato QUI, centralmente, prima di eseguire qualunque fase: la fase
 # "preprocessing" importa solo phase1_preprocess.py, che si limita a
