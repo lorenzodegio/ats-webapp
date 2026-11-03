@@ -67,8 +67,13 @@ primo passo):
 git --version; uv --version; tesseract --version
 tesseract --list-langs                        # deve contenere "ita"
 Get-Service postgresql-x64-16, infra-ollama | Select Name, Status
-ollama list                                    # deve contenere i due modelli qwen3-vl
+(Invoke-RestMethod http://127.0.0.1:11434/api/tags).models.name  # deve contenere i due modelli qwen3-vl
 ```
+
+`ollama list` presuppone `ollama.exe` nel PATH della sessione, cosa non
+garantita se e' installato solo come servizio (`infra-ollama`) — l'API
+sopra non ha questa dipendenza ed e' lo stesso controllo usato da
+`install.ps1`.
 
 ## 2. Layout delle cartelle
 

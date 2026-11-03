@@ -63,7 +63,11 @@ $script:ServizioPostgresEsterno  = "postgresql-x64-16"
 # -- Account di servizio ----------------------------------------------------
 # Utenza unica del progetto (account amministratore gia' esistente, non
 # creato qui) -  default: chi esegue questo script; sovrascrivibile.
-$script:ServiceAccount = if ($env:ATS_SERVICE_ACCOUNT) { $env:ATS_SERVICE_ACCOUNT } else { "$env:COMPUTERNAME\$env:USERNAME" }
+# USERDOMAIN, non COMPUTERNAME: un account di dominio (es. ASLVA\utente)
+# ha USERDOMAIN="ASLVA", mentre COMPUTERNAME e' sempre il nome macchina
+# locale -  con COMPUTERNAME il default costruirebbe un account locale
+# inesistente invece di quello di dominio realmente usato per la sessione.
+$script:ServiceAccount = if ($env:ATS_SERVICE_ACCOUNT) { $env:ATS_SERVICE_ACCOUNT } else { "$env:USERDOMAIN\$env:USERNAME" }
 
 function Write-Step {
     param([string]$Messaggio)

@@ -63,14 +63,27 @@ if (-not $ollamaSvc) {
 if ($ollamaSvc.Status -ne "Running") {
     throw "Servizio '$ServizioOllamaEsterno' non e' in esecuzione  -  avvialo prima di continuare."
 }
+# Via API, non "ollama list": ollama.exe non e' necessariamente nel PATH
+# di questa sessione (installato come servizio, non registrato nel PATH
+# di sistema) -  l'API e' raggiungibile comunque, visto che il servizio
+# e' gia' verificato in esecuzione sopra. .env potrebbe non esistere
+# ancora a questo punto (viene creato da .env.example piu' sotto): non
+# uso Get-DotEnvValue qui, che richiede il file e farebbe fallire questo
+# controllo invece di arrivare alla creazione di .env.
+$ollamaHost = "http://127.0.0.1:11434"
+$envPathPrereq = Join-Path $RepoRoot ".env"
+if (Test-Path $envPathPrereq) {
+    $ollamaHost = Get-DotEnvValue -Chiave "OLLAMA_HOST" -Default $ollamaHost
+}
 try {
-    $modelliOllama = (& ollama list 2>&1) -join "`n"
+    $tagsOllama = Invoke-RestMethod -Uri "$ollamaHost/api/tags" -TimeoutSec 10
+    $modelliOllama = ($tagsOllama.models | ForEach-Object { $_.name }) -join "`n"
 } catch {
-    throw "Impossibile interrogare Ollama (comando 'ollama list')  -  $($_.Exception.Message)"
+    throw "Impossibile interrogare Ollama (API $ollamaHost/api/tags)  -  $($_.Exception.Message)"
 }
 foreach ($modello in @("qwen3-vl:30b-a3b-instruct", "qwen3-vl:8b-instruct")) {
     if ($modelliOllama -notmatch [regex]::Escape($modello)) {
-        throw "Modello Ollama '$modello' non trovato (ollama list)  -  dovrebbe essere gia' scaricato su questo server (vedi DEPLOY_WINDOWS.md)."
+        throw "Modello Ollama '$modello' non trovato ($ollamaHost/api/tags)  -  dovrebbe essere gia' scaricato su questo server (vedi DEPLOY_WINDOWS.md)."
     }
 }
 
@@ -162,9 +175,19 @@ if "ita" not in lingue:
     sys.exit(1)
 print("Tesseract con lingua ita ok.")
 "@
-& $pipelinePython -c $smokeTestPython
-if ($LASTEXITCODE -ne 0) {
-    throw "Smoke test dell'ambiente pipeline fallito (vedi output sopra) - correggi prima di procedere."
+# Scritto su file ed eseguito, non passato con "-c": PowerShell 5.1 non
+# fa l'escape delle virgolette doppie interne quando passa un argomento
+# a un eseguibile nativo, quindi le stringhe con `"fitz"`/`r"..."` dentro
+# $smokeTestPython arriverebbero troncate/spezzate a python.exe.
+$tmpSmokeTest = Join-Path $env:TEMP "ats_smoke_test_$PID.py"
+Set-Content -Path $tmpSmokeTest -Value $smokeTestPython -Encoding ASCII
+try {
+    & $pipelinePython $tmpSmokeTest
+    if ($LASTEXITCODE -ne 0) {
+        throw "Smoke test dell'ambiente pipeline fallito (vedi output sopra) - correggi prima di procedere."
+    }
+} finally {
+    Remove-Item $tmpSmokeTest -ErrorAction SilentlyContinue
 }
 
 # -- 3. Database e ruolo Postgres --------------------------------------------
@@ -247,7 +270,16 @@ import easyocr
 easyocr.Reader(["it"], gpu=False, model_storage_directory=r"$easyocrDir")
 print("Modelli EasyOCR pronti in $easyocrDir")
 "@
-& $pipelinePython -c $scriptEasyOcr
+# Stesso motivo del smoke test sopra: file temporaneo invece di "-c",
+# PowerShell 5.1 non fa l'escape delle virgolette interne allo script.
+$tmpEasyOcr = Join-Path $env:TEMP "ats_easyocr_setup_$PID.py"
+Set-Content -Path $tmpEasyOcr -Value $scriptEasyOcr -Encoding ASCII
+try {
+    & $pipelinePython $tmpEasyOcr
+    if ($LASTEXITCODE -ne 0) { throw "Download dei modelli EasyOCR fallito (codice $LASTEXITCODE)." }
+} finally {
+    Remove-Item $tmpEasyOcr -ErrorAction SilentlyContinue
+}
 
 if ($SaltaServizi) {
     Write-Step "Servizio Windows saltato (-SaltaServizi)  -  installazione preparata, avvia manualmente per verificare:"
